@@ -16,6 +16,7 @@
 #include "dmsh_chain.h"   // DMSH_CHAIN: the shader translation chain the cache folder is named after
 #include "game_version.h"
 #include "controller_map.h"
+#include "settings_file.h"   // settings.txt: the game's settings window writes it, the start reads it
 #include "include/totk_ui_lang.h"
 #include "totk_shader_contrib.h"   // the shared shader list contribution and its reminder
 
@@ -178,6 +179,16 @@ static BOOL make_dir(NSString *path) {
     return [NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
 }
 
+/* One variable from settings.txt (runtime/settings_file.h settings_env): set unless the environment has it (open --env wins);
+   what was done goes to the game's log. */
+static void settings_apply(const char *name, const char *value, int line, void *log) {
+    const char *now = settings_setenv(name, value);
+    NSString *from = line ? [NSString stringWithFormat:@"line %d", line] : @"its preset";
+    [(__bridge NSMutableArray *)log addObject:strcmp(now, value)
+        ? [NSString stringWithFormat:@"%s=%s from the environment (settings.txt %@: %s)", name, now, from, value]
+        : [NSString stringWithFormat:@"%s=%s (settings.txt %@)", name, value, from]];
+}
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"totk"];
@@ -244,6 +255,20 @@ int main(int argc, char **argv) {
             int line = text ? controller_map_parse(text.UTF8String, map, modes, &problem) : 1;
             if (line) { show_error([NSString stringWithFormat:@"%@, line %d: %s", controls, line, problem]); return 1; }
         }
+        /* The player's settings (runtime/settings_file.h; the game's settings window, Command-,, writes them), checked the
+           same way and turned into the variables the game reads at start. The game writes the window's changes to this file. */
+        NSString *settingsFile = env_or("TOTK_SETTINGS", [data stringByAppendingPathComponent:@"settings.txt"]);
+        NSMutableArray<NSString *> *settingsLog = [NSMutableArray array];
+        NSData *settingsData = [NSData dataWithContentsOfFile:settingsFile];
+        if (settingsData) {
+            NSString *text = settingsData.length < 16384 ? [[NSString alloc] initWithData:settingsData encoding:NSUTF8StringEncoding] : nil;
+            Settings settings; settings_defaults(&settings);
+            const char *problem = settingsData.length < 16384 ? "not UTF-8 text" : "larger than 16 KB";
+            int line = text ? settings_parse(text.UTF8String, &settings, &problem) : 1;
+            if (line) { show_error([NSString stringWithFormat:@"%@, line %d: %s", settingsFile, line, problem]); return 1; }
+            settings_env(&settings, settings_build_caps(), settings_apply, (__bridge void *)settingsLog);
+        }
+        setenv("TOTK_SETTINGS", settingsFile.fileSystemRepresentation, 1);
         setenv("TOTK_CONTROLS", controls.fileSystemRepresentation, 1);
         setenv("TOTK_PROFILE_DIR", profile.fileSystemRepresentation, 1);
         setenv("TOTK_SHADER_CACHE", cache.fileSystemRepresentation, 1);
@@ -285,6 +310,7 @@ int main(int argc, char **argv) {
             dup2(fileno(lf), STDERR_FILENO);
             fclose(lf);
         }
+        for (NSString *entry in settingsLog) fprintf(stderr, "[launcher] settings: %s\n", entry.UTF8String);
         char *const arguments[] = {(char *)binary.fileSystemRepresentation, "rewritten/" TOTK_GAME_DIR, "boot", NULL};
         execv(arguments[0], arguments);
         fprintf(stderr, "[launcher] execv failed: %s\n", strerror(errno));

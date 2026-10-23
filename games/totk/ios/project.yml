@@ -18,6 +18,7 @@ targets:
           - frontend.m
           - loader.c
           - game_patches_botw.c
+          - settings_panel.m   # the Mac settings window (AppKit)
       - path: ../third_party/d2r_gfx/gfx/nvn
       - path: ../third_party/d2r_gfx/gfx/tex
       - path: Gen/embed.S

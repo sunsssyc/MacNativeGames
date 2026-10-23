@@ -1,4 +1,15 @@
 /* Synthetic data page; the getter and key-3 cycle are the production code. */
+#if defined(SETTINGS_PANEL_PROBE)
+/* This fixture supplies only output/aspect state. Keep the real DRS exports out of
+   the settings test's optional-feature namespace; its own stub covers presence
+   and absence, including builds where game_patches_v143.c implements DRS. */
+#define runtime_drs_set shortcut_fixture_drs_set
+#define runtime_drs_enabled shortcut_fixture_drs_enabled
+#define runtime_drs_scale shortcut_fixture_drs_scale
+#define runtime_drs_min shortcut_fixture_drs_min
+#define runtime_drs_set_min shortcut_fixture_drs_set_min
+#define runtime_drs_set_target_ms shortcut_fixture_drs_set_target_ms
+#endif
 #if defined(TOTK_GAME_V143)
 #include "../games/totk/runtime/game_patches_v143.c"
 #else

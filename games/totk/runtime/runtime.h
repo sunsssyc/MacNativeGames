@@ -94,6 +94,7 @@ uint64_t runtime_output_res_extra_bytes(void);
 int runtime_render_res(unsigned *w, unsigned *h);   /* TOTK_RENDER_RES above 1600x900 that the heaps count (1.4.3 on the Mac; 0 elsewhere) */
 int runtime_output_res_toggle(void);                    /* legacy two-state output size switch */
 int runtime_output_mode_cycle(void);                    /* key 3: MetalFX 2K -> native 2K -> off */
+int runtime_output_mode_set(int mode);                  /* the settings window: key 3's mode directly, 0 off, 1 MetalFX 2K, 2 native 2K; 0 = not available */
 uint64_t runtime_output_size_current(void);              /* configured canvas: width in low 32 bits, height in high 32 bits */
 void runtime_warm_progress(uint64_t done,uint64_t total,uint64_t shaders,uint64_t shader_total,uint64_t pipelines,uint64_t pipeline_total);
 void runtime_warm_done(void);
@@ -106,6 +107,7 @@ int fps_overlay_hud_mode(void);
 int fps_overlay_full_hud(void);
 int runtime_aspect_toggle(void);   /* runtime/aspect_patch.h: key 4, 16:9 -> fit to the window / display -> 21:9 (or TOTK_ASPECT) (Mac, 1.2.1 / 1.4.3); 0 where unavailable */
 int runtime_aspect_step(void);     /* key 4's step: 0 16:9, 1 fit to the window, 2 21:9 / TOTK_ASPECT; -1 where unavailable */
+int runtime_aspect_set(int step);  /* the settings window: key 4's step directly; 0 where unavailable */
 void runtime_aspect_view(double w, double h);   /* frontend.m: the window's drawable size, which key 4 follows */
 float runtime_aspect_now(void);     /* the ratio in force, 0 = the game's own 16:9 */
 int hud_compact(void);   /* gfx/nvn/fps_overlay.c: the overlay lines go to the window's corner panel (TOTK_HUD=corners: in the picture) */

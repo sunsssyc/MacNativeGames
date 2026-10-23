@@ -616,3 +616,13 @@ int runtime_output_mode_cycle(void){
     dm_gfx_set_flag("mfx_output",mfx);dm_gfx_set_flag("mfx_upscale",mfx);
     fprintf(stderr,"[totk] key 3: %s\n",name);return 1;
 }
+/* The settings window (runtime/settings_panel.m): key 3's mode directly (0 off, 1 MetalFX 2K, 2 native 2K), composed as the
+   cycle above does it, so a change never passes through a third mode (MetalFX 2K -> off does not lay the game out in 2K on
+   the way). 0 when the mode is not available: native 2K needs the 2K swapchain (TOTK_OUTPUT_RES auto or <w>x<h>). */
+int runtime_output_mode_set(int mode){
+    if(mode<0||mode>2||(mode==2&&!output_page))return 0;
+    extern void dm_gfx_set_flag(const char *,int);
+    if(output_page){int full=atomic_load((_Atomic uint64_t *)(void *)(output_page+32))==pack_size(output_w,output_h);if(full!=(mode==2))runtime_output_res_toggle();}
+    dm_gfx_set_flag("mfx_output",mode==1);dm_gfx_set_flag("mfx_upscale",mode==1);
+    fprintf(stderr,"[totk] settings: picture %s\n",mode==2?"原生 2K":mode?"MetalFX 2K":"关闭 2K");return 1;
+}

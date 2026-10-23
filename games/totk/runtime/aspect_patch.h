@@ -90,6 +90,16 @@ int runtime_aspect_toggle(void) {
     return 1;
 }
 
+/* The settings window (runtime/settings_panel.m): key 4's step directly (ASPECT_STEP_*), fitting even where key 4 would skip
+   it (it then shows 16:9 or 21:9). 0 where key 4 is not available. */
+int runtime_aspect_set(int step) {
+    if (!g_aspect_slot || step < ASPECT_STEP_GAME || step > ASPECT_STEP_WIDE) return 0;
+    if (atomic_exchange(&g_aspect_step, step) == step) return 1;
+    aspect_apply();
+    fprintf(stderr, "[totk] settings: aspect ratio %s (%.4f)\n", aspect_step_name(step), runtime_aspect_now());
+    return 1;
+}
+
 /* sites: instructions that leave the ratio in an s register (fdiv s<d>, ... or ldr s<d>, [x<n>, #imm]), each with a
    plain stub from stub_off (ASPECT_STUB bytes per site). The first ncam are camera sites: when vert_off is not 0 and
    the inlined setFovy is there, their fovy load also gets a Vert+ stub (ASPECT_VSTUB bytes each, from vert_off). Both

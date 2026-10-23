@@ -452,6 +452,21 @@ int runtime_output_mode_cycle(void) {
     fprintf(stderr, "[totk] key 3: %s\n", name);
     return 1;
 }
+/* The settings window (runtime/settings_panel.m): key 3's mode directly (0 off, 1 MetalFX 2K, 2 native 2K), composed as the
+   cycle above does it, so a change never passes through a third mode. 0 when the mode is not available: native 2K needs
+   the 2K swapchain (TOTK_OUTPUT_RES auto with the HeapDef overlay, or <w>x<h>). */
+int runtime_output_mode_set(int mode) {
+    if (mode < 0 || mode > 2 || (mode == 2 && !output_page)) return 0;
+    extern void dm_gfx_set_flag(const char *name, int value);
+    if (output_page) {
+        int full = atomic_load((_Atomic uint64_t *)(void *)(output_page + DP_OUTPUT_SIZE)) == pack_size(output_w, output_h);
+        if (full != (mode == 2)) runtime_output_res_toggle();
+    }
+    dm_gfx_set_flag("mfx_output", mode == 1);
+    dm_gfx_set_flag("mfx_upscale", mode == 1);
+    fprintf(stderr, "[totk] settings: picture %s\n", mode == 2 ? "原生 2K" : mode ? "MetalFX 2K" : "关闭 2K");
+    return 1;
+}
 
 /* Diagnostic (Mac): TOTK_TRAP_AT=<main offset> writes brk #0 there; the crash handler (runtime/loader.c, SIGTRAP) then prints
    the registers and the call chain at that moment, plus what TOTK_CRASH_MEM / TOTK_CRASH_HEAPFIND / TOTK_CRASH_HEAPWALK ask for,
