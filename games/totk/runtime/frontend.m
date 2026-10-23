@@ -166,8 +166,10 @@ static void front_mouse_update(void){   /* main thread; also runtime/gamepad.m's
  }
  fprintf(stderr,"[totk] mouse %s\n",want?"held by the window (key 7, or Command-Tab, lets it go)":"let go");
 }
+extern void fps_overlay_set_collapsed(int collapsed);
 @interface TOTKShortcutHelp:NSView
 @property(strong) NSTextField *label;
+@property(strong) NSButton *collapseButton;
 @property(strong) NSTimer *timer;
 @property NSSize textSize;
 -(void)position;
@@ -209,9 +211,21 @@ static NSString *shortcut_text(void){
 }
 -(instancetype)initWithFrame:(NSRect)frame{if((self=[super initWithFrame:frame])){int compact=hud_compact();self.wantsLayer=YES;self.layer.backgroundColor=[NSColor colorWithCalibratedWhite:0.04 alpha:compact?0.72:0.86].CGColor;self.layer.cornerRadius=compact?7:14;self.layer.borderWidth=1;self.layer.borderColor=[NSColor colorWithCalibratedWhite:1 alpha:compact?0.14:0.2].CGColor;
  self.label=[NSTextField labelWithString:shortcut_text()];self.label.font=[NSFont systemFontOfSize:17 weight:NSFontWeightMedium];self.label.textColor=NSColor.whiteColor;self.label.alignment=NSTextAlignmentCenter;self.label.maximumNumberOfLines=0;self.label.lineBreakMode=NSLineBreakByWordWrapping;self.label.frame=NSInsetRect(self.bounds,20,18);self.label.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;[self addSubview:self.label];
- if(compact){self.label.alignment=NSTextAlignmentLeft;self.label.lineBreakMode=NSLineBreakByClipping;}
+ if(compact){
+ self.collapseButton=[NSButton buttonWithTitle:@"" target:self action:@selector(toggleCollapsed:)];
+ self.collapseButton.bordered=NO;self.collapseButton.font=[NSFont systemFontOfSize:10];self.collapseButton.contentTintColor=NSColor.whiteColor;
+ [self addSubview:self.collapseButton];
+ self.label.alignment=NSTextAlignmentLeft;self.label.lineBreakMode=NSLineBreakByClipping;}
  [self refresh];__weak TOTKShortcutHelp *weak=self;self.timer=[NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t){(void)t;[weak refresh];}];}return self;}
+-(void)toggleCollapsed:(id)sender{(void)sender;
+ fps_overlay_set_collapsed(fps_overlay_full_hud());[self refresh];
+}
 -(void)refresh{
+ if(self.collapseButton){BOOL full=fps_overlay_full_hud();
+  self.collapseButton.title=full?@(TOTK_UI("收起 ▴","Hide ▴")):@(TOTK_UI("展开 ▾","Show ▾"));
+  self.collapseButton.toolTip=full?@(TOTK_UI("收起为 FPS；按 1 可完全隐藏","Collapse to FPS; press 1 to hide all")):@(TOTK_UI("展开性能信息和快捷键","Expand performance info and shortcuts"));
+  self.collapseButton.accessibilityLabel=self.collapseButton.toolTip;
+ }
  if(!hud_compact()){self.label.stringValue=shortcut_text();return;}
  NSFont *mono=[NSFont monospacedSystemFontOfSize:10.5 weight:NSFontWeightMedium],*small=[NSFont systemFontOfSize:10];
  NSColor *green=[NSColor colorWithCalibratedRed:80/255.0 green:1 blue:120/255.0 alpha:1],*yellow=[NSColor colorWithCalibratedRed:1 green:230/255.0 blue:40/255.0 alpha:1];
@@ -226,13 +240,18 @@ static NSString *shortcut_text(void){
  else [a appendAttributedString:[[NSAttributedString alloc] initWithString:shortcut_text() attributes:@{NSFontAttributeName:small,NSForegroundColorAttributeName:[NSColor colorWithCalibratedWhite:0.75 alpha:1]}]];
  if([a isEqualToAttributedString:self.label.attributedStringValue])return;
  self.label.attributedStringValue=a;NSSize z=[self.label sizeThatFits:NSMakeSize(CGFLOAT_MAX,CGFLOAT_MAX)];self.textSize=NSMakeSize(ceil(z.width),ceil(z.height));[self position];}
--(NSView *)hitTest:(NSPoint)p{(void)p;return nil;}
+-(NSView *)hitTest:(NSPoint)p{
+ if(self.hidden||!self.collapseButton)return nil;
+ NSPoint local=[self convertPoint:p fromView:self.superview];
+ return NSPointInRect(local,self.collapseButton.frame)?self.collapseButton:nil;
+}
 -(void)viewDidMoveToSuperview{[super viewDidMoveToSuperview];[self position];}
 -(void)layout{[super layout];[self position];}
 -(void)position{if(!self.superview)return;NSRect f,in;
- if(hud_compact()){CGFloat w=self.textSize.width+16,h=self.textSize.height+10,m=10;f=NSMakeRect(floor(self.superview.bounds.size.width-w-m),floor(self.superview.bounds.size.height-h-m),w,h);in=NSMakeRect(8,5,self.textSize.width,self.textSize.height);}
+ if(hud_compact()){CGFloat w=self.textSize.width+70,h=MAX(26,self.textSize.height+10),m=10;f=NSMakeRect(floor(self.superview.bounds.size.width-w-m),floor(self.superview.bounds.size.height-h-m),w,h);in=NSMakeRect(8,5,self.textSize.width,self.textSize.height);}
  else{CGFloat w=MIN(560,MAX(280,self.superview.bounds.size.width-40)),h=240;f=NSMakeRect(floor((self.superview.bounds.size.width-w)/2),floor((self.superview.bounds.size.height-h)/2),w,h);in=NSInsetRect(NSMakeRect(0,0,w,h),20,18);}
- if(!NSEqualRects(self.frame,f))self.frame=f;self.label.frame=in;}
+ if(!NSEqualRects(self.frame,f))self.frame=f;self.label.frame=in;
+ if(self.collapseButton)self.collapseButton.frame=NSMakeRect(NSWidth(self.bounds)-58,NSHeight(self.bounds)-24,52,22);}
 @end
 /* The live FPS in the menu bar: a menu of the game's own, after its app menu on the left, whose title is the frame rate
    ("60 FPS", "50+50 FPS" while frame interpolation shows generated frames), refreshed twice a second with the value the

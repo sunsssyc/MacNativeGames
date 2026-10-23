@@ -116,6 +116,19 @@ int main(int argc, const char **argv) { @autoreleasepool {
         NSSize fit = [panel.label sizeThatFits:panel.label.bounds.size];
         assert(fit.height <= panel.label.bounds.size.height);
     }
+    if(hud_compact()) {
+        CGFloat expandedHeight=NSHeight(panel.frame);
+        NSPoint buttonPoint=[panel convertPoint:NSMakePoint(NSMidX(panel.collapseButton.frame),NSMidY(panel.collapseButton.frame)) toView:host];
+        assert([panel hitTest:buttonPoint]==panel.collapseButton);
+        assert([panel hitTest:[panel convertPoint:NSMakePoint(8,8) toView:host]]==nil);
+        [panel.collapseButton performClick:nil];
+        assert(!panel.hidden&&!fps_overlay_full_hud()&&fps_overlay_hints_enabled());
+        assert(NSHeight(panel.frame)<expandedHeight);
+        assert([panel.collapseButton.title containsString:@"展开"]);
+        [panel.collapseButton performClick:nil];
+        assert(fps_overlay_full_hud());
+        assert([panel.collapseButton.title containsString:@"收起"]);
+    }
     /* Key 1: all -> minimal (FPS only) -> off -> all. */
     hud_publish(HUD_FPS, "FPS 60  2560x1440", 0); hud_publish(HUD_SHADER, "New shaders 3 / total 9", 0);
     press(18); tick(); assert(fps_overlay_hints_enabled() && !fps_overlay_full_hud());

@@ -40,6 +40,7 @@ static const Glyph FONT[] = {
 /* Key 1 cycles all -> minimal (FPS only) -> off -> all. */
 static _Atomic int g_hud_mode = HUD_MODE_ALL;
 int fps_overlay_hud_mode(void) { return atomic_load_explicit(&g_hud_mode, memory_order_relaxed); }
+void fps_overlay_set_collapsed(int collapsed) { atomic_store_explicit(&g_hud_mode, collapsed ? HUD_MODE_MINIMAL : HUD_MODE_ALL, memory_order_relaxed); }
 int fps_overlay_hints_enabled(void) { return fps_overlay_hud_mode() != HUD_MODE_OFF; }
 int fps_overlay_full_hud(void) { return fps_overlay_hud_mode() == HUD_MODE_ALL; }
 int fps_overlay_toggle_hints(void) {

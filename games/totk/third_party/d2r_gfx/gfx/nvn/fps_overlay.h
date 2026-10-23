@@ -18,6 +18,7 @@ int fps_overlay_enabled(void);
 /* Key 1: HUD_MODE_ALL (FPS, shader collection, load and the shortcut reminder) -> HUD_MODE_MINIMAL (FPS only) -> HUD_MODE_OFF. */
 enum { HUD_MODE_OFF = 0, HUD_MODE_ALL = 1, HUD_MODE_MINIMAL = 2 };
 int fps_overlay_hud_mode(void);
+void fps_overlay_set_collapsed(int collapsed); /* visible panel: FPS only or full; key 1 still also hides it */
 int fps_overlay_hints_enabled(void);   /* the FPS readout shows (all or minimal) */
 int fps_overlay_full_hud(void);        /* everything shows (all) */
 int fps_overlay_toggle_hints(void);   /* atomically steps to the next mode and returns it (HUD_MODE_OFF = nothing shows) */
