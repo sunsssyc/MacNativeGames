@@ -25,6 +25,7 @@ static NSView *shortcutHelp;
    mouse mode goes off (front_mouse_update). */
 static BOOL mouseHeld;
 static BOOL quickMenuOpen;
+static BOOL quick_menu_key(NSEvent *event, BOOL down);
 static int textEntryOpen;
 static void front_mouse_update(void);
 int taa_enabled(void);   /* third_party/d2r_gfx/gfx/nvn/totk_taa.m: key 5 */
@@ -115,8 +116,8 @@ static CVReturn vsync_callback(CVDisplayLinkRef link,const CVTimeStamp *now,cons
 @end
 @implementation TOTKInputView
 -(BOOL)acceptsFirstResponder{return YES;}
--(void)keyDown:(NSEvent *)e{if(!totk_hint_key(e,YES))runtime_input_key(e.keyCode,1);}
--(void)keyUp:(NSEvent *)e{if(!totk_hint_key(e,NO))runtime_input_key(e.keyCode,0);}
+-(void)keyDown:(NSEvent *)e{if(!totk_hint_key(e,YES)&&!quick_menu_key(e,YES))runtime_input_key(e.keyCode,1);}
+-(void)keyUp:(NSEvent *)e{if(!totk_hint_key(e,NO)&&!quick_menu_key(e,NO))runtime_input_key(e.keyCode,0);}
 -(void)flagsChanged:(NSEvent *)e{if(e.keyCode==56)runtime_input_key(56,!!(e.modifierFlags&NSEventModifierFlagShift));if(e.keyCode==58)runtime_input_key(58,!!(e.modifierFlags&NSEventModifierFlagOption));}
 /* The game has no mouse controls. In native full screen, keep the pointer out of the picture while idle, but show it again
    as soon as it moves; restore it when the window loses focus or leaves full screen. */
@@ -168,7 +169,7 @@ static void front_mouse_update(void){   /* main thread; also runtime/gamepad.m's
  fprintf(stderr,"[totk] mouse %s\n",want?"held by the window (key 7, or Command-Tab, lets it go)":"let go");
 }
 extern void fps_overlay_set_collapsed(int collapsed);
-@interface TOTKShortcutHelp:NSView
+@interface TOTKShortcutHelp:NSVisualEffectView
 @property(strong) NSTextField *label;
 @property(strong) NSButton *collapseButton;
 @property(strong) NSTimer *timer;
@@ -178,7 +179,12 @@ extern void fps_overlay_set_collapsed(int collapsed);
 @property(strong) NSMutableArray<NSButton *> *quickRows;
 @property(strong) NSTextField *quickTitle, *quickNote;
 @property(strong) NSView *quickPresets;
-@property(strong) NSButton *quickSettings, *quickHint;
+@property(strong) NSButton *quickSettings, *quickHint, *quickReturn;
+@property(strong) NSView *quickTabs;
+@property(strong) NSTextField *quickHelpTitle, *quickHelpText, *quickPresetLabel;
+@property(strong) NSView *quickBackdrop;
+@property NSInteger quickTab, quickFocused;
+-(void)toggleCollapsed:(id)sender;
 -(void)position;
 -(void)refresh;
 @end
@@ -188,13 +194,22 @@ extern void fps_overlay_set_collapsed(int collapsed);
 @implementation TOTKShortcutHelp
 -(void)drawRect:(NSRect)dirty {
  (void)dirty;if(!hud_compact()||!fps_overlay_full_hud())return;
- CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);
- [quickInk() setFill];
- [[NSBezierPath bezierPathWithRect:NSMakeRect(0,h-40,w,40)] fill];
- [[NSBezierPath bezierPathWithRect:NSMakeRect(0,0,w,63)] fill];
- // A restrained geometric divider echoes the original options screen without copied game assets.
- [[quickInk() colorWithAlphaComponent:0.35] setStroke];NSBezierPath *line=[NSBezierPath bezierPath];line.lineWidth=0.5;
- [line moveToPoint:NSMakePoint(16,h-68)];[line lineToPoint:NSMakePoint(w-16,h-68)];[line stroke];
+ CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds),left=w*0.155,right=w*0.845;
+ [[quickInk() colorWithAlphaComponent:0.38] setStroke];
+ // Both dividers share the same anchors and centre, including on resize.
+ for(int i=0;i<2;i++){
+  CGFloat y=i?h*0.158:h*0.754;NSBezierPath *line=[NSBezierPath bezierPath];line.lineWidth=0.7;
+  [line moveToPoint:NSMakePoint(left,y)];[line lineToPoint:NSMakePoint(w/2-12,y)];
+  [line moveToPoint:NSMakePoint(w/2+12,y)];[line lineToPoint:NSMakePoint(right,y)];[line stroke];
+  NSBezierPath *mark=[NSBezierPath bezierPath];[mark moveToPoint:NSMakePoint(w/2,y+6)];[mark lineToPoint:NSMakePoint(w/2+6,y)];[mark lineToPoint:NSMakePoint(w/2,y-6)];[mark lineToPoint:NSMakePoint(w/2-6,y)];[mark closePath];[mark stroke];
+ }
+ if(w>=820){NSRect help=NSMakeRect(w*0.63,h*0.24,w*0.33,h*0.475);
+  [[NSColor colorWithCalibratedRed:0.025 green:0.03 blue:0.02 alpha:0.7] setFill];
+  [[NSBezierPath bezierPathWithRoundedRect:help xRadius:5 yRadius:5] fill];
+  [[quickInk() colorWithAlphaComponent:0.15] setStroke];
+  [[NSBezierPath bezierPathWithRoundedRect:help xRadius:5 yRadius:5] stroke];
+  NSBezierPath *rule=[NSBezierPath bezierPath];[rule moveToPoint:NSMakePoint(NSMinX(help)+24,NSMaxY(help)-75)];[rule lineToPoint:NSMakePoint(NSMaxX(help)-24,NSMaxY(help)-75)];[rule stroke];
+ }
 }
 /* Key 6 (runtime/gamepad.m): the controller type; auto says what it takes the connected controller for. */
 static NSString *pad_type_text(void){
@@ -255,27 +270,12 @@ static NSString *shortcut_text(void){
 -(void)layout{[super layout];[self position];}
 -(void)position{if(!self.superview)return;NSRect f,in;
  if(hud_compact()){
-  BOOL full=fps_overlay_full_hud();CGFloat w=full?520:280,m=12;
-  w=MIN(w,MAX(240,self.superview.bounds.size.width-2*m));
-  CGFloat h=full?MIN(552,MAX(120,self.superview.bounds.size.height-2*m)):36;
-  f=full?NSMakeRect(floor((self.superview.bounds.size.width-w)/2),floor((self.superview.bounds.size.height-h)/2),w,h):NSMakeRect(floor(self.superview.bounds.size.width-w-m),floor(self.superview.bounds.size.height-h-m),w,h);
-  in=NSMakeRect(16,full?h-61:10,w-92,16);
+  BOOL full=fps_overlay_full_hud();CGFloat w=MIN(280,NSWidth(self.superview.bounds)-24),h=36;
+  f=full?self.superview.bounds:NSMakeRect(NSWidth(self.superview.bounds)-w-12,NSHeight(self.superview.bounds)-h-12,w,h);
+  in=NSMakeRect(16,10,w-92,16);
  }else{CGFloat w=MIN(560,MAX(280,self.superview.bounds.size.width-40)),h=240;f=NSMakeRect(floor((self.superview.bounds.size.width-w)/2),floor((self.superview.bounds.size.height-h)/2),w,h);in=NSInsetRect(NSMakeRect(0,0,w,h),20,18);}
  if(!NSEqualRects(self.frame,f))self.frame=f;self.label.frame=in;
- if(self.collapseButton){
-  CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);
-  self.collapseButton.frame=NSMakeRect(w-68,h-30,58,24);
-  self.quickTitle.frame=NSMakeRect(72,h-32,w-144,26);
-  self.quickScroll.frame=NSMakeRect(12,63,w-24,MAX(0,h-137));
-  CGFloat bodyWidth=NSWidth(self.quickScroll.contentView.bounds);
-  [self.quickBody setFrameSize:NSMakeSize(bodyWidth,414)];
-  for(NSButton *row in self.quickRows){NSRect rf=row.frame;rf.size.width=bodyWidth-2;row.frame=rf;}
-  NSRect pf=self.quickPresets.frame;pf.size.width=bodyWidth-2;self.quickPresets.frame=pf;
-  for(NSView *v in self.quickPresets.subviews)v.frame=NSMakeRect(v.tag*(bodyWidth/3),0,bodyWidth/3-4,30);
-  self.quickHint.frame=NSMakeRect(14,32,(w-34)/2,28);
-  self.quickSettings.frame=NSMakeRect(w/2+3,32,(w-34)/2,28);
-  self.quickNote.frame=NSMakeRect(16,10,w-32,17);
- }
+ if(self.collapseButton)[self layoutQuickMenu];
 }
 
 @end

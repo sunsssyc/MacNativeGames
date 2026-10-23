@@ -194,6 +194,16 @@ int main(int argc, const char **argv) { @autoreleasepool {
     /* The in-game mouse menu uses the same persisted/live model. */
     expect(settings_quick_apply(101), "quick balanced preset saves"); mfx_latch();
     expect(mfxup_output_enabled() && taa_enabled(), "quick preset applies to the game");
+    expect(settings_quick_preset()==PRESET_BALANCED,"quick preset highlight matches complete balanced settings");
+    pick(c.aniso,8,c);
+    expect(settings_quick_preset()==-1,"custom anisotropic filtering clears quick preset highlight");
+    expect(settings_quick_apply(101),"restore balanced preset after custom anisotropic filtering");mfx_latch();
+    if(optional) {
+        runtime_drs_set_min(0.8f);
+        expect(settings_quick_preset()==-1,"custom DRS floor clears quick preset highlight");
+        expect(settings_quick_apply(101),"restore balanced preset after custom DRS floor");mfx_latch();
+        expect(settings_quick_preset()==PRESET_BALANCED,"complete preset restores quick highlight");
+    }
     expect(settings_quick_apply(23) && !taa_enabled(), "quick smoothing click applies");
     if(path) expect(!file_settings(path).taa, "quick smoothing click persists");
     expect(settings_quick_apply(19), "quick interpolation click saves before frame latch");
@@ -204,10 +214,34 @@ int main(int argc, const char **argv) { @autoreleasepool {
         expect(settings_quick_apply(111) && runtime_drs_enabled(), "quick dynamic resolution enables");
         if(path) expect(file_settings(path).fps_cap==90 && file_settings(path).drs, "cap and DRS persist together");
     }
+    /* Previous/next arrows are inverse operations, including wraparound and skipped modes. */
+    if(optional) {
+        expect(settings_quick_step(110,-1) && nvn_fps_cap()==60, "reverse cap 90 to 60");
+        pick(c.fpsCap,30,c);
+        expect(settings_quick_step(110,-1) && nvn_fps_cap()==0, "reverse cap wraps 30 to unlimited");
+        expect(settings_quick_step(110,1) && nvn_fps_cap()==30, "forward cap reverses wrap");
+        if(path)expect(file_settings(path).fps_cap==30,"reverse/forward cap saves current choice");
+    }
+    runtime_output_mode_set(PICTURE_OFF);
+    expect(settings_quick_step(20,-1) && canvas_2k() && !mfxup_output_enabled(), "reverse picture wraps off to native");
+    expect(settings_quick_step(20,-1) && mfxup_output_enabled(), "reverse picture native to MetalFX");
+    expect(settings_quick_step(20,-1) && !mfxup_output_enabled() && !canvas_2k(), "reverse picture MetalFX to off");
+    if(aspect) {
+        const double views[]={1.6,16.0/9.0,21.0/9.0};
+        for(unsigned i=0;i<sizeof(views)/sizeof(views[0]);i++) {
+            shortcut_test_aspect_init(views[i]);
+            expect(settings_quick_step(21,-1) && runtime_aspect_step()==ASPECT_STEP_WIDE,"reverse aspect from standard reaches wide");
+            expect(settings_quick_step(21,-1) && runtime_aspect_step()==(i?ASPECT_STEP_GAME:ASPECT_STEP_FIT),"reverse aspect skips duplicate fit");
+            expect(settings_quick_step(21,1) && runtime_aspect_step()==ASPECT_STEP_WIDE,"forward restores reverse aspect");
+            if(path)expect(file_settings(path).aspect==ASPECT_STEP_WIDE,"reverse aspect saves actual runtime state");
+        }
+    }
     /* A 1080p-only runtime must cycle MetalFX back to off, skipping unavailable native 2K. */
     shortcut_test_disable_native();runtime_output_mode_set(PICTURE_OFF);
     expect(settings_quick_apply(20) && mfxup_output_enabled(), "quick picture enables MetalFX without native 2K");
     expect(settings_quick_apply(20) && !mfxup_output_enabled(), "quick picture can turn MetalFX back off without native 2K");
+    expect(settings_quick_step(20,-1) && mfxup_output_enabled(), "reverse picture skips absent native mode");
+    expect(settings_quick_step(20,-1) && !mfxup_output_enabled(), "reverse picture returns off without native");
     [c.panel close];
     if (failures) return 1;
     printf("pass: settings window (%s, %s, %s, %s)\n", optional ? "with cap and resolution controller" : "without them (greyed out)",

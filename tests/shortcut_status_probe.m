@@ -37,6 +37,10 @@ static void press(unsigned key) {
     runtime_input_key_synthetic(key, 1);
     runtime_input_key_synthetic(key, 0);
 }
+static BOOL menu_key(unsigned key, NSEventModifierFlags modifiers, BOOL down) {
+    NSEvent *e=[NSEvent keyEventWithType:down?NSEventTypeKeyDown:NSEventTypeKeyUp location:NSZeroPoint modifierFlags:modifiers timestamp:0 windowNumber:0 context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:key];
+    return quick_menu_key(e,down);
+}
 static void tick(void) {
     [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
     [((TOTKShortcutHelp *)shortcutHelp).timer fire];
@@ -110,9 +114,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     fakePadDetected = GAMEPAD_TYPE_SWITCH; tick(); expect(panel, @"手柄类型：当前 自动（Switch）");
 
     if (hud_compact()) {
-        assert(panel.frame.size.width < host.bounds.size.width - 20);
-        assert(panel.frame.size.height < host.bounds.size.height - 20);
-        assert(panel.frame.origin.x >= 0 && panel.frame.origin.y >= 0);
+        assert(NSEqualRects(panel.frame, host.bounds));
         assert(NSWidth(panel.label.frame) >= panel.textSize.width);
     } else {
         NSSize fit = [panel.label sizeThatFits:panel.label.bounds.size];
@@ -124,22 +126,86 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert([panel hitTest:buttonPoint]==panel.collapseButton);
         assert([panel hitTest:[panel convertPoint:NSMakePoint(8,8) toView:host]]!=nil);
         assert(panel.quickRows.count==8);
+        assert(panel.quickTabs.subviews.count==3 && panel.quickTab==0);
+        for (NSUInteger i=0;i<8;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i>=6));
+        assert(panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickSettings.hiddenOrHasHiddenAncestor);
+        assert([panel.quickRows[3].title isEqualToString:@"渲染分辨率"]);
         assert([((TOTKQuickRow *)panel.quickRows[2]).value isEqualToString:@"半刷新率"]);
         int before=taa_enabled();[panel.quickRows[5] performClick:nil];tick();
         assert(taa_enabled()!=before);
+        assert(panel.quickFocused==5);
+        ((TOTKQuickRow *)panel.quickRows[2]).hovered=YES;
+        [panel focusQuickRow:panel.quickRows[5]];
+        assert(!((TOTKQuickRow *)panel.quickRows[2]).hovered);
+        assert([panel.quickHelpTitle.stringValue isEqualToString:panel.quickRows[5].title]);
+        assert(panel.quickHelpText.stringValue.length>0);
+        NSString *taaHelp=[panel.quickHelpText.stringValue copy];
+        tick();assert(panel.quickFocused==5 && [panel.quickHelpText.stringValue isEqualToString:taaHelp]);
         assert([((TOTKQuickRow *)panel.quickRows[5]).value isEqualToString:taa_enabled()?@"开启":@"关闭"]);
         [panel.quickRows[5] performClick:nil];tick();assert(taa_enabled()==before);
+        NSButton *controlsTab=(NSButton *)[panel.quickTabs viewWithTag:1];
+        [controlsTab performClick:nil];tick();assert(panel.quickTab==1);
+        for (NSUInteger i=0;i<8;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i<6));
+        assert(panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickSettings.hiddenOrHasHiddenAncestor);
         int padBefore=fakePadType;[panel.quickRows[6] performClick:nil];tick();assert(fakePadType==gamepad_type_next(padBefore));
         int mouseBefore=fakeMouse;[panel.quickRows[7] performClick:nil];tick();assert(fakeMouse!=mouseBefore);
+        assert(panel.quickFocused==7);
+        assert([panel.quickHelpTitle.stringValue isEqualToString:panel.quickRows[7].title]);
+        assert(panel.quickHelpText.stringValue.length>0 && ![panel.quickHelpText.stringValue isEqualToString:taaHelp]);
+        NSButton *assistantTab=(NSButton *)[panel.quickTabs viewWithTag:2];
+        [assistantTab performClick:nil];tick();assert(panel.quickTab==2);
+        for (NSButton *row in panel.quickRows) assert(row.hiddenOrHasHiddenAncestor);
+        assert(!panel.quickHint.hiddenOrHasHiddenAncestor && !panel.quickSettings.hiddenOrHasHiddenAncestor);
         assert(quickMenuOpen);[panel.quickHint performClick:nil];assert(hintClicks==1);
+        /* Find tag zero among children, since viewWithTag:0 can return the container. */
+        NSButton *pictureTab=nil;
+        for (NSButton *tab in panel.quickTabs.subviews) if(tab.tag==0)pictureTab=tab;
+        assert(pictureTab);[pictureTab performClick:nil];tick();assert(panel.quickTab==0);
+        /* A resized window keeps both columns and every navigation target in bounds. */
+        const NSSize sizes[]={ {640,360}, {1280,720}, {900,540} };
+        for(NSUInteger i=0;i<sizeof(sizes)/sizeof(sizes[0]);i++) {
+            [host setFrameSize:sizes[i]];[panel position];tick();
+            assert(NSEqualRects(panel.frame,host.bounds));
+            for(NSView *v in @[panel.quickTabs,panel.quickScroll,panel.quickHelpTitle,panel.quickHelpText,panel.collapseButton]) {
+                NSRect r=[v convertRect:v.bounds toView:panel];
+                assert(NSWidth(r)>0 && NSHeight(r)>0 && NSContainsRect(panel.bounds,r));
+            }
+        }
         NSPoint rowPoint=[panel.quickRows[5] convertPoint:NSMakePoint(40,15) toView:host];
         assert([panel hitTest:rowPoint]==panel.quickRows[5]);
-        [panel.collapseButton performClick:nil];
+        /* A gameplay key held before opening settings must be released through the menu. */
+        [panel.collapseButton performClick:nil];assert(!quickMenuOpen);
+        runtime_input_key_synthetic(49,1);assert(keys[49]);
+        [panel.collapseButton performClick:nil];assert(quickMenuOpen);
+        assert(menu_key(49,0,NO) && !keys[49]);
+        /* Navigation consumes its events and follows displayed row order, not storage order. */
+        [pictureTab performClick:nil];assert(panel.quickFocused==0);
+        assert(menu_key(125,0,YES) && panel.quickFocused==1);
+        assert(menu_key(125,0,NO) && panel.quickFocused==1);
+        assert(menu_key(125,0,YES) && panel.quickFocused==3);
+        assert(menu_key(126,0,YES) && panel.quickFocused==1);
+        assert(menu_key(48,0,YES) && panel.quickTab==1 && panel.quickFocused==6);
+        int keyboardPad=fakePadType;
+        assert(menu_key(124,0,YES) && fakePadType==gamepad_type_next(keyboardPad));
+        assert(menu_key(123,0,YES) && fakePadType==keyboardPad);
+        assert(menu_key(125,0,YES) && panel.quickFocused==7);
+        assert(menu_key(125,0,YES) && panel.quickFocused==6);
+        assert(menu_key(48,0,YES) && panel.quickTab==2);
+        assert(menu_key(48,NSEventModifierFlagShift,YES) && panel.quickTab==1);
+        assert(menu_key(48,NSEventModifierFlagShift,YES) && panel.quickTab==0);
+        assert(!menu_key(48,NSEventModifierFlagCommand,YES) && panel.quickTab==0);
+        assert(!menu_key(0,0,YES));
+        assert(menu_key(53,0,YES));
+        assert(!menu_key(125,0,YES));
         assert(!panel.hidden&&!fps_overlay_full_hud()&&fps_overlay_hints_enabled());
         assert(NSHeight(panel.frame)<expandedHeight);assert(!quickMenuOpen);
+        assert(panel.quickTabs.hiddenOrHasHiddenAncestor && panel.quickHelpTitle.hiddenOrHasHiddenAncestor && panel.quickHelpText.hiddenOrHasHiddenAncestor);
+        NSPoint outside=NSMakePoint(NSMinX(panel.frame)-5,NSMinY(panel.frame)-5);
+        assert([panel hitTest:outside]==nil);
         assert([panel.collapseButton.title containsString:@"展开"]);
         [panel.collapseButton performClick:nil];
-        assert(fps_overlay_full_hud());
+        assert(fps_overlay_full_hud() && quickMenuOpen);
+        assert(!panel.quickTabs.hiddenOrHasHiddenAncestor && !panel.quickHelpTitle.hiddenOrHasHiddenAncestor);
         assert([panel.collapseButton.title containsString:@"收起"]);
     }
     /* Key 1: all -> minimal (FPS only) -> off -> all. */
@@ -150,6 +216,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert(![panel.label.stringValue containsString:@"New shaders"] && ![panel.label.stringValue containsString:@"快捷键"]);
     } else assert(panel.hidden);   // corners: the FPS corner stays in the picture, the shortcut box goes
     press(18); tick(); assert(panel.hidden && !fps_overlay_hints_enabled());
+    if(hud_compact())assert(!quickMenuOpen);
     mfx_set(MFX_MAX); mfx_latch(); tick();
     press(18); tick(); assert(!panel.hidden && fps_overlay_full_hud());
     expect(panel, @"补帧：当前 不限帧");

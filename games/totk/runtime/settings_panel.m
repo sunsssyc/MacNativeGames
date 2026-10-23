@@ -383,7 +383,8 @@ void settings_panel_menu(NSMenu *appMenu) {
 }
 
 /* The in-game card shares the settings window's model, live setters and atomic save. */
-BOOL settings_quick_apply(int action) {
+BOOL settings_quick_step(int action, int direction) {
+    direction = direction < 0 ? -1 : 1;
     if (!settingsController) settingsController = [TOTKSettings new];
     [settingsController prepare];
     Settings next = model;
@@ -391,18 +392,41 @@ BOOL settings_quick_apply(int action) {
     else if (action == 110) {
         const int caps[] = {30, 40, 60, 90, 120, 0};
         int i = 0; while (i < 6 && caps[i] != next.fps_cap) i++;
-        next.fps_cap = caps[(i + 1) % 6];
+        next.fps_cap = caps[(i + 6 + direction) % 6];
     } else if (action == 111) next.drs = !next.drs;
-    else if (action == 19) next.interpolation = (next.interpolation + 1) % MFX_NMODES;
+    else if (action == 19) next.interpolation = (next.interpolation + MFX_NMODES + direction) % MFX_NMODES;
     else if (action == 20) {
-        next.picture = (next.picture + 1) % 3;
-        if (next.picture == PICTURE_NATIVE && !native_this_run()) next.picture = PICTURE_OFF;
+        next.picture = (next.picture + 3 + direction) % 3;
+        if (next.picture == PICTURE_NATIVE && !native_this_run()) next.picture = (next.picture + 3 + direction) % 3;
         next.output = next.picture == PICTURE_NATIVE ? CANVAS_2K : CANVAS_1080P;
     }
-    else if (action == 21) { runtime_aspect_toggle(); live_read(&next); }
+    else if (action == 21) {
+        if (direction > 0) runtime_aspect_toggle();
+        else {
+            /* Discover the runtime cycle: fit may be skipped when it duplicates another ratio. */
+            int start = runtime_aspect_step(), previous = start;
+            if (start >= 0) {
+                for (int i = 0; i < 3; i++) {
+                    if (!runtime_aspect_toggle()) break;
+                    int current = runtime_aspect_step();
+                    if (current == start) { runtime_aspect_set(previous); break; }
+                    previous = current;
+                    if (i == 2) runtime_aspect_set(start);
+                }
+            }
+        }
+        live_read(&next);
+    }
     else if (action == 23) next.taa = !next.taa;
     [settingsController commit:next save:YES];
     return !settingsSaveFailed;
+}
+BOOL settings_quick_apply(int action) { return settings_quick_step(action, 1); }
+int settings_quick_preset(void) {
+    if (!settingsController) settingsController = [TOTKSettings new];
+    [settingsController prepare];
+    int preset = settings_matching_preset(&model);
+    return preset == PRESET_CUSTOM ? -1 : preset;
 }
 void settings_quick_open(void) {
     if (!settingsController) settingsController = [TOTKSettings new];
