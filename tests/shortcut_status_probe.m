@@ -5,6 +5,8 @@
 #include "../games/totk/third_party/d2r_gfx/gfx/nvn/fps_overlay.h"
 #include <assert.h>
 
+static int hintClicks;
+BOOL totk_hint_key(NSEvent *e, BOOL down) { if(down&&e.keyCode==28){hintClicks++;return YES;}return NO; }
 void mfx_set(int mode);
 int mfx_latch(void);
 void mfxup_set(int on);
@@ -40,7 +42,7 @@ static void tick(void) {
     [((TOTKShortcutHelp *)shortcutHelp).timer fire];
 }
 static void expect(TOTKShortcutHelp *panel, NSString *text) {
-    if (![panel.label.stringValue containsString:text]) {
+    if (![(hud_compact() && fps_overlay_full_hud() ? [shortcut_text() stringByAppendingString:panel.label.stringValue] : panel.label.stringValue) containsString:text]) {
         fprintf(stderr, "expected %s in:\n%s\n", text.UTF8String, panel.label.stringValue.UTF8String);
         abort();
     }
@@ -120,10 +122,21 @@ int main(int argc, const char **argv) { @autoreleasepool {
         CGFloat expandedHeight=NSHeight(panel.frame);
         NSPoint buttonPoint=[panel convertPoint:NSMakePoint(NSMidX(panel.collapseButton.frame),NSMidY(panel.collapseButton.frame)) toView:host];
         assert([panel hitTest:buttonPoint]==panel.collapseButton);
-        assert([panel hitTest:[panel convertPoint:NSMakePoint(8,8) toView:host]]==nil);
+        assert([panel hitTest:[panel convertPoint:NSMakePoint(8,8) toView:host]]!=nil);
+        assert(panel.quickRows.count==8);
+        assert([((TOTKQuickRow *)panel.quickRows[2]).value isEqualToString:@"半刷新率"]);
+        int before=taa_enabled();[panel.quickRows[5] performClick:nil];tick();
+        assert(taa_enabled()!=before);
+        assert([((TOTKQuickRow *)panel.quickRows[5]).value isEqualToString:taa_enabled()?@"开启":@"关闭"]);
+        [panel.quickRows[5] performClick:nil];tick();assert(taa_enabled()==before);
+        int padBefore=fakePadType;[panel.quickRows[6] performClick:nil];tick();assert(fakePadType==gamepad_type_next(padBefore));
+        int mouseBefore=fakeMouse;[panel.quickRows[7] performClick:nil];tick();assert(fakeMouse!=mouseBefore);
+        assert(quickMenuOpen);[panel.quickHint performClick:nil];assert(hintClicks==1);
+        NSPoint rowPoint=[panel.quickRows[5] convertPoint:NSMakePoint(40,15) toView:host];
+        assert([panel hitTest:rowPoint]==panel.quickRows[5]);
         [panel.collapseButton performClick:nil];
         assert(!panel.hidden&&!fps_overlay_full_hud()&&fps_overlay_hints_enabled());
-        assert(NSHeight(panel.frame)<expandedHeight);
+        assert(NSHeight(panel.frame)<expandedHeight);assert(!quickMenuOpen);
         assert([panel.collapseButton.title containsString:@"展开"]);
         [panel.collapseButton performClick:nil];
         assert(fps_overlay_full_hud());

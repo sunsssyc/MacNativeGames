@@ -24,6 +24,7 @@ static NSView *shortcutHelp;
    gamepad.m. It lets go when the window loses the keyboard (Command-Tab, a click elsewhere), during text entry and when
    mouse mode goes off (front_mouse_update). */
 static BOOL mouseHeld;
+static BOOL quickMenuOpen;
 static int textEntryOpen;
 static void front_mouse_update(void);
 int taa_enabled(void);   /* third_party/d2r_gfx/gfx/nvn/totk_taa.m: key 5 */
@@ -121,7 +122,7 @@ static CVReturn vsync_callback(CVDisplayLinkRef link,const CVTimeStamp *now,cons
    as soon as it moves; restore it when the window loses focus or leaves full screen. */
 -(void)hideCursorIfIdle:(NSTimer *)timer{
  (void)timer;self.cursorHideTimer=nil;
- if(!self.cursorAutoHideActive||!self.window.isKeyWindow||!(self.window.styleMask&NSWindowStyleMaskFullScreen))return;
+ if(quickMenuOpen||!self.cursorAutoHideActive||!self.window.isKeyWindow||!(self.window.styleMask&NSWindowStyleMaskFullScreen))return;
  if(!self.cursorIsHidden){[NSCursor hide];self.cursorIsHidden=YES;}
 }
 -(void)mouseMoved:(NSEvent *)e{
@@ -153,7 +154,7 @@ static CVReturn vsync_callback(CVDisplayLinkRef link,const CVTimeStamp *now,cons
 }
 @end
 static void front_mouse_update(void){   /* main thread; also runtime/gamepad.m's hook when mouse mode changes */
- BOOL want=window&&runtime_mouse_enabled()&&window.isKeyWindow&&!textEntryOpen;
+ BOOL want=window&&runtime_mouse_enabled()&&window.isKeyWindow&&!textEntryOpen&&!quickMenuOpen;
  if(want==mouseHeld)return;
  mouseHeld=want;
  if(want){
@@ -172,13 +173,31 @@ extern void fps_overlay_set_collapsed(int collapsed);
 @property(strong) NSButton *collapseButton;
 @property(strong) NSTimer *timer;
 @property NSSize textSize;
+@property(strong) NSScrollView *quickScroll;
+@property(strong) NSView *quickBody;
+@property(strong) NSMutableArray<NSButton *> *quickRows;
+@property(strong) NSTextField *quickTitle, *quickNote;
+@property(strong) NSView *quickPresets;
+@property(strong) NSButton *quickSettings, *quickHint;
 -(void)position;
 -(void)refresh;
 @end
-/* Compact HUD (default): one small box in the window's top-right corner with the FPS, shader and load lines (published by
-   gfx/nvn/fps_overlay.c, refreshed twice a second) above the shortcuts. TOTK_HUD=corners: the lines stay in the picture's
-   corners and this is the larger centred shortcut box. */
+#include "quick_menu.inc"
+/* Compact HUD (default): mouse-operated game settings, or a collapsed FPS strip. Extra performance readings
+   published by gfx/nvn/fps_overlay.c are available on hover. TOTK_HUD=corners retains the legacy shortcut box. */
 @implementation TOTKShortcutHelp
+-(void)drawRect:(NSRect)dirty {
+ (void)dirty;if(!hud_compact()||!fps_overlay_full_hud())return;
+ CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);
+ [[NSColor colorWithCalibratedRed:0.73 green:0.68 blue:0.49 alpha:0.7] setStroke];
+ NSBezierPath *corners=[NSBezierPath bezierPath];corners.lineWidth=1;
+ for(int i=0;i<4;i++){CGFloat x=i&1?w-7:7,y=i&2?h-7:7,dx=i&1?-1:1,dy=i&2?-1:1;
+  [corners moveToPoint:NSMakePoint(x,y+dy*13)];[corners lineToPoint:NSMakePoint(x,y)];[corners lineToPoint:NSMakePoint(x+dx*13,y)];}
+ [corners stroke];
+ NSBezierPath *rule=[NSBezierPath bezierPath];rule.lineWidth=0.5;
+ [rule moveToPoint:NSMakePoint(16,h-67)];[rule lineToPoint:NSMakePoint(w-16,h-67)];
+ [rule moveToPoint:NSMakePoint(16,65)];[rule lineToPoint:NSMakePoint(w-16,65)];[rule stroke];
+}
 /* Key 6 (runtime/gamepad.m): the controller type; auto says what it takes the connected controller for. */
 static NSString *pad_type_text(void){
  static const char *const names[GAMEPAD_TYPE_COUNT]={NULL,"Xbox","PlayStation","Switch"};
@@ -214,8 +233,8 @@ static NSString *shortcut_text(void){
  if(compact){
  self.collapseButton=[NSButton buttonWithTitle:@"" target:self action:@selector(toggleCollapsed:)];
  self.collapseButton.bordered=NO;self.collapseButton.font=[NSFont systemFontOfSize:10];self.collapseButton.contentTintColor=NSColor.whiteColor;
- [self addSubview:self.collapseButton];
- self.label.alignment=NSTextAlignmentLeft;self.label.lineBreakMode=NSLineBreakByClipping;}
+ [self addSubview:self.collapseButton];[self buildQuickMenu];
+ self.label.autoresizingMask=NSViewNotSizable;self.label.alignment=NSTextAlignmentLeft;self.label.lineBreakMode=NSLineBreakByClipping;}
  [self refresh];__weak TOTKShortcutHelp *weak=self;self.timer=[NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t){(void)t;[weak refresh];}];}return self;}
 -(void)toggleCollapsed:(id)sender{(void)sender;
  fps_overlay_set_collapsed(fps_overlay_full_hud());[self refresh];
@@ -223,35 +242,44 @@ static NSString *shortcut_text(void){
 -(void)refresh{
  if(self.collapseButton){BOOL full=fps_overlay_full_hud();
   self.collapseButton.title=full?@(TOTK_UI("收起 ▴","Hide ▴")):@(TOTK_UI("展开 ▾","Show ▾"));
-  self.collapseButton.toolTip=full?@(TOTK_UI("收起为 FPS；按 1 可完全隐藏","Collapse to FPS; press 1 to hide all")):@(TOTK_UI("展开性能信息和快捷键","Expand performance info and shortcuts"));
+  self.collapseButton.toolTip=full?@(TOTK_UI("收起为 FPS；按 1 可完全隐藏","Collapse to FPS; press 1 to hide all")):@(TOTK_UI("展开游戏设置","Expand game settings"));
   self.collapseButton.accessibilityLabel=self.collapseButton.toolTip;
  }
  if(!hud_compact()){self.label.stringValue=shortcut_text();return;}
- NSFont *mono=[NSFont monospacedSystemFontOfSize:10.5 weight:NSFontWeightMedium],*small=[NSFont systemFontOfSize:10];
- NSColor *green=[NSColor colorWithCalibratedRed:80/255.0 green:1 blue:120/255.0 alpha:1],*yellow=[NSColor colorWithCalibratedRed:1 green:230/255.0 blue:40/255.0 alpha:1];
- NSMutableAttributedString *a=[NSMutableAttributedString new];
- int full=fps_overlay_full_hud();   // key 1 minimal: the FPS line (line 0) only; the others keep their last text, so skip them
- for(int i=0;i<4;i++){char t[128];int hl=0;if((!full&&i!=0)||!hud_snapshot(i,t,sizeof t,&hl))continue;   // FPS, shaders, render pipelines, load
-  [a appendAttributedString:[[NSAttributedString alloc] initWithString:[([NSString stringWithUTF8String:t] ?: @"") stringByAppendingString:@"\n"] attributes:@{NSFontAttributeName:mono,NSForegroundColorAttributeName:hl?yellow:green}]];}
- if(!full){if(a.length)[a deleteCharactersInRange:NSMakeRange(a.length-1,1)];   // no empty line under the single FPS line
-  else [a appendAttributedString:[[NSAttributedString alloc] initWithString:@"FPS --" attributes:@{NSFontAttributeName:mono,NSForegroundColorAttributeName:green}]];}
- else if(a.length){NSMutableParagraphStyle *gap=[NSMutableParagraphStyle new];gap.paragraphSpacingBefore=4;
-  [a appendAttributedString:[[NSAttributedString alloc] initWithString:shortcut_text() attributes:@{NSFontAttributeName:small,NSForegroundColorAttributeName:[NSColor colorWithCalibratedWhite:0.75 alpha:1],NSParagraphStyleAttributeName:gap}]];}
- else [a appendAttributedString:[[NSAttributedString alloc] initWithString:shortcut_text() attributes:@{NSFontAttributeName:small,NSForegroundColorAttributeName:[NSColor colorWithCalibratedWhite:0.75 alpha:1]}]];
- if([a isEqualToAttributedString:self.label.attributedStringValue])return;
- self.label.attributedStringValue=a;NSSize z=[self.label sizeThatFits:NSMakeSize(CGFLOAT_MAX,CGFLOAT_MAX)];self.textSize=NSMakeSize(ceil(z.width),ceil(z.height));[self position];}
+ [self refreshQuickMenu];return;
+}
 -(NSView *)hitTest:(NSPoint)p{
  if(self.hidden||!self.collapseButton)return nil;
- NSPoint local=[self convertPoint:p fromView:self.superview];
- return NSPointInRect(local,self.collapseButton.frame)?self.collapseButton:nil;
+ return [super hitTest:p];
 }
+
 -(void)viewDidMoveToSuperview{[super viewDidMoveToSuperview];[self position];}
 -(void)layout{[super layout];[self position];}
 -(void)position{if(!self.superview)return;NSRect f,in;
- if(hud_compact()){CGFloat w=self.textSize.width+70,h=MAX(26,self.textSize.height+10),m=10;f=NSMakeRect(floor(self.superview.bounds.size.width-w-m),floor(self.superview.bounds.size.height-h-m),w,h);in=NSMakeRect(8,5,self.textSize.width,self.textSize.height);}
- else{CGFloat w=MIN(560,MAX(280,self.superview.bounds.size.width-40)),h=240;f=NSMakeRect(floor((self.superview.bounds.size.width-w)/2),floor((self.superview.bounds.size.height-h)/2),w,h);in=NSInsetRect(NSMakeRect(0,0,w,h),20,18);}
+ if(hud_compact()){
+  BOOL full=fps_overlay_full_hud();CGFloat w=full?360:280,m=12;
+  w=MIN(w,MAX(240,self.superview.bounds.size.width-2*m));
+  CGFloat h=full?MIN(552,MAX(120,self.superview.bounds.size.height-2*m)):36;
+  f=NSMakeRect(floor(self.superview.bounds.size.width-w-m),floor(self.superview.bounds.size.height-h-m),w,h);
+  in=NSMakeRect(16,full?h-61:10,w-92,16);
+ }else{CGFloat w=MIN(560,MAX(280,self.superview.bounds.size.width-40)),h=240;f=NSMakeRect(floor((self.superview.bounds.size.width-w)/2),floor((self.superview.bounds.size.height-h)/2),w,h);in=NSInsetRect(NSMakeRect(0,0,w,h),20,18);}
  if(!NSEqualRects(self.frame,f))self.frame=f;self.label.frame=in;
- if(self.collapseButton)self.collapseButton.frame=NSMakeRect(NSWidth(self.bounds)-58,NSHeight(self.bounds)-24,52,22);}
+ if(self.collapseButton){
+  CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);
+  self.collapseButton.frame=NSMakeRect(w-68,h-30,58,24);
+  self.quickTitle.frame=NSMakeRect(16,h-33,w-94,22);
+  self.quickScroll.frame=NSMakeRect(12,63,w-24,MAX(0,h-137));
+  CGFloat bodyWidth=NSWidth(self.quickScroll.contentView.bounds);
+  [self.quickBody setFrameSize:NSMakeSize(bodyWidth,414)];
+  for(NSButton *row in self.quickRows){NSRect rf=row.frame;rf.size.width=bodyWidth-2;row.frame=rf;}
+  NSRect pf=self.quickPresets.frame;pf.size.width=bodyWidth-2;self.quickPresets.frame=pf;
+  for(NSView *v in self.quickPresets.subviews)v.frame=NSMakeRect(v.tag*(bodyWidth/3),0,bodyWidth/3-4,30);
+  self.quickHint.frame=NSMakeRect(14,32,(w-34)/2,28);
+  self.quickSettings.frame=NSMakeRect(w/2+3,32,(w-34)/2,28);
+  self.quickNote.frame=NSMakeRect(16,10,w-32,17);
+ }
+}
+
 @end
 /* The live FPS in the menu bar: a menu of the game's own, after its app menu on the left, whose title is the frame rate
    ("60 FPS", "50+50 FPS" while frame interpolation shows generated frames), refreshed twice a second with the value the
@@ -288,7 +316,7 @@ static void front_menubar_fps(void){   // starts the refresh once the window exi
   front_title_fps(title);}];
 }
 void runtime_shortcut_help_toggle(void){int mode=fps_overlay_toggle_hints();dispatch_async(dispatch_get_main_queue(), ^{   // key 1: all -> minimal (FPS only) -> off
- shortcutHelp.hidden=mode==0||(mode==2&&!hud_compact());[(TOTKShortcutHelp *)shortcutHelp refresh];});}   // mode 0 off, 2 minimal (fps_overlay.h HUD_MODE_*)
+ shortcutHelp.hidden=mode==0||(mode==2&&!hud_compact());[(TOTKShortcutHelp *)shortcutHelp refresh];front_mouse_update();});}   // mode 0 off, 2 minimal (fps_overlay.h HUD_MODE_*)
 /* The drawable follows the window's pixel size; the present pass scales the game picture (1920x1080 docked) into it and
    keeps 16:9 (black bars on other shapes), so a larger window or full screen shows the game at its own resolution instead
    of a fixed small drawable that the compositor stretches. */

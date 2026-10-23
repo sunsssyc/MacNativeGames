@@ -12,6 +12,7 @@ void mfxup_set(int on);
 int mfxup_enabled(void);
 void mfxup_output_set(int on);
 void shortcut_test_output_init(void);
+void shortcut_test_disable_native(void);
 void shortcut_test_aspect_init(double view);
 void dm_gfx_set_flag(const char *name, int value) {   /* the flags key 3 and the window's picture modes use */
     if (!strcmp(name, "mfx_output")) mfxup_output_set(value);
@@ -190,6 +191,23 @@ int main(int argc, const char **argv) { @autoreleasepool {
         runtime_drs_set_min(0.9f); [c tick];
         expect(fabsf(model.drs_min - 0.9f) < 1e-4f, "minimum follows external changes while open");
     }
+    /* The in-game mouse menu uses the same persisted/live model. */
+    expect(settings_quick_apply(101), "quick balanced preset saves"); mfx_latch();
+    expect(mfxup_output_enabled() && taa_enabled(), "quick preset applies to the game");
+    expect(settings_quick_apply(23) && !taa_enabled(), "quick smoothing click applies");
+    if(path) expect(!file_settings(path).taa, "quick smoothing click persists");
+    expect(settings_quick_apply(19), "quick interpolation click saves before frame latch");
+    if(path) expect(file_settings(path).interpolation == MFX_30, "pending interpolation persists correctly");
+    mfx_latch();expect(mfx_enabled()==MFX_30, "quick interpolation reaches next frame");
+    if(optional) {
+        expect(settings_quick_apply(110) && nvn_fps_cap()==90, "quick cap cycles from 60 to 90");
+        expect(settings_quick_apply(111) && runtime_drs_enabled(), "quick dynamic resolution enables");
+        if(path) expect(file_settings(path).fps_cap==90 && file_settings(path).drs, "cap and DRS persist together");
+    }
+    /* A 1080p-only runtime must cycle MetalFX back to off, skipping unavailable native 2K. */
+    shortcut_test_disable_native();runtime_output_mode_set(PICTURE_OFF);
+    expect(settings_quick_apply(20) && mfxup_output_enabled(), "quick picture enables MetalFX without native 2K");
+    expect(settings_quick_apply(20) && !mfxup_output_enabled(), "quick picture can turn MetalFX back off without native 2K");
     [c.panel close];
     if (failures) return 1;
     printf("pass: settings window (%s, %s, %s, %s)\n", optional ? "with cap and resolution controller" : "without them (greyed out)",

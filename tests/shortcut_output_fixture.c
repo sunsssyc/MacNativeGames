@@ -3,6 +3,7 @@
 /* This fixture supplies only output/aspect state. Keep the real DRS exports out of
    the settings test's optional-feature namespace; its own stub covers presence
    and absence, including builds where game_patches_v143.c implements DRS. */
+#define runtime_output_res shortcut_fixture_output_res
 #define runtime_drs_set shortcut_fixture_drs_set
 #define runtime_drs_enabled shortcut_fixture_drs_enabled
 #define runtime_drs_scale shortcut_fixture_drs_scale
@@ -16,6 +17,11 @@
 #include "../games/totk/runtime/game_patches.c"
 #endif
 #include <assert.h>
+#if defined(SETTINGS_PANEL_PROBE)
+#undef runtime_output_res
+static int fixture_native_disabled;
+int runtime_output_res(unsigned *w,unsigned *h) { return !fixture_native_disabled && shortcut_fixture_output_res(w,h); }
+#endif
 
 static _Atomic uint64_t page[8];
 void shortcut_test_output_init(void) {
@@ -37,3 +43,7 @@ void shortcut_test_aspect_init(double view) {
     g_aspect_slot = &slot;
     runtime_aspect_view(view * 1080, 1080);
 }
+
+#if defined(SETTINGS_PANEL_PROBE)
+void shortcut_test_disable_native(void) { fixture_native_disabled=1; output_page=NULL; }
+#endif

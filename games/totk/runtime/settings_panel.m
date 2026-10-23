@@ -381,3 +381,30 @@ void settings_panel_menu(NSMenu *appMenu) {
     item.keyEquivalentModifierMask = NSEventModifierFlagCommand; item.target = settingsController;
     [appMenu addItem:item]; [appMenu addItem:NSMenuItem.separatorItem];
 }
+
+/* The in-game card shares the settings window's model, live setters and atomic save. */
+BOOL settings_quick_apply(int action) {
+    if (!settingsController) settingsController = [TOTKSettings new];
+    [settingsController prepare];
+    Settings next = model;
+    if (action >= 100 && action <= 102) settings_preset(&next, action - 100);
+    else if (action == 110) {
+        const int caps[] = {30, 40, 60, 90, 120, 0};
+        int i = 0; while (i < 6 && caps[i] != next.fps_cap) i++;
+        next.fps_cap = caps[(i + 1) % 6];
+    } else if (action == 111) next.drs = !next.drs;
+    else if (action == 19) next.interpolation = (next.interpolation + 1) % MFX_NMODES;
+    else if (action == 20) {
+        next.picture = (next.picture + 1) % 3;
+        if (next.picture == PICTURE_NATIVE && !native_this_run()) next.picture = PICTURE_OFF;
+        next.output = next.picture == PICTURE_NATIVE ? CANVAS_2K : CANVAS_1080P;
+    }
+    else if (action == 21) { runtime_aspect_toggle(); live_read(&next); }
+    else if (action == 23) next.taa = !next.taa;
+    [settingsController commit:next save:YES];
+    return !settingsSaveFailed;
+}
+void settings_quick_open(void) {
+    if (!settingsController) settingsController = [TOTKSettings new];
+    [settingsController open:nil];
+}
