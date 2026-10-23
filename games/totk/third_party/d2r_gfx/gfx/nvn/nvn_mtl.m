@@ -39,6 +39,7 @@ static uint64_t g_gen_shown;            // interpolated frames handed to the scr
 #include "nvn_refl.h"
 #include "nvn_texture_plan.h"
 #include "fps_overlay.h"
+#include "nvn_fps_cap.h"
 #include "nvn_cover.h"
 #include "totk_shader_scope.h"   // totk_shader_scope_contains: the warm-up scope (PR #84)
 #include "dmsh_chain.h"   // DMSH_CHAIN：本源码树期望的 B 着色器库翻译链版本 | DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree
@@ -2453,6 +2454,7 @@ void dm_gfx_set_flag(const char *name, int v) {
     if (!strcmp(name, "deferred")) { extern void nvn_set_deferred_binds(int on); nvn_set_deferred_binds(v); return; }
     if (!strcmp(name, "framewait")) { extern void nvn_set_framewait(int on); nvn_set_framewait(v); return; }
     if (!strcmp(name, "uncapped_interval")) { extern void nvn_set_uncapped_interval(int on); nvn_set_uncapped_interval(v); return; }
+    if (!strcmp(name, "fps_cap")) { nvn_set_fps_cap(v); MLOG("[flag] fps_cap = %d（0 = 关，30..240；下一帧起生效）| from the next frame (0 = off)", nvn_fps_cap()); return; }   // TOTK_FPS_CAP at run time, as the settings panel sets it (hle_nvn.c)
     if (!strcmp(name, "occl_visible")) { atomic_store(&g_occl_vis, v); MLOG("[flag] occl_visible = %d", v); return; }
     if (!strcmp(name, "drvfill")) { atomic_store(&g_drvfill_on, v != 0); MLOG("[flag] drvfill = %d", v != 0); return; }
     if (!strcmp(name, "ubo_snapshot")) { (void)usnap_on(); atomic_store(&g_usnap_on, v != 0); MLOG("[flag] ubo_snapshot = %d", v != 0); return; }
@@ -12676,7 +12678,7 @@ static int fps_overlay_prepare(int slot, MTLViewport vp, MTLViewport *ovp, float
     int scale = fps_overlay_scale(vp.height);
     uint64_t mfx_at = atomic_load(&g_mfxup_last), gen_at = atomic_load(&g_mfxi_last), cur = atomic_load(&g_cur_frame);   // the last game frame MetalFX did the upscale (" MFX") / an interpolated frame was shown ("+50")
     int gen = gen_at && cur - gen_at < 30 ? fps_overlay_gen_value() : 0;
-    fps_overlay_info info = {fps_overlay_value(), (int)lround(vp.width), (int)lround(vp.height), mfx_at && cur - mfx_at < 30, gen > 0 ? gen : 0, atomic_load(&g_pic_big)};
+    fps_overlay_info info = {fps_overlay_value(), (int)lround(vp.width), (int)lround(vp.height), mfx_at && cur - mfx_at < 30, gen > 0 ? gen : 0, atomic_load(&g_pic_big), nvn_fps_cap_pacing()};
     if (hud_compact()) { char text[96]; fps_overlay_text(&info, text, sizeof text); hud_publish(HUD_FPS, text, 0); return 0; }   // shown in the window's corner panel
     pthread_mutex_lock(&mu);
     if (g_fps_key[slot].scale != scale || memcmp(&g_fps_key[slot].info, &info, sizeof info)) {
@@ -13529,12 +13531,15 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
 static CAMetalDisplayLink *g_link; static CFRunLoopRef g_link_rl; static int g_link_started;
 static int g_link_owns_layer, g_classic_busy;   // 持 g_pq_mu：图层挂着节拍对象期间 nextDrawable 会抛异常，自取 drawable 的出图线程与节拍对象互斥 | Under g_pq_mu: nextDrawable throws while the layer has the display link object attached, so the present thread that takes its own drawable and the display link object are mutually exclusive
 static int link_on(void) { return g_dm_present_link && g_link != nil; }
+static int link_rate1(void) {   // the one rate the display link is asked for in its normal mode (1)
+    const char *explicit_hz = getenv("DM_PRESENT_HZ"), *rt = getenv("TOTK_REALTIME");
+    int hz = explicit_hz ? atoi(explicit_hz) : (rt && !strcmp(rt, "0")) ? 60 : mtl_display_hz();
+    return hz < 30 || hz > 120 ? 60 : hz;
+}
 static CAFrameRateRange link_range(int mode) {
     if (mode == 3) return CAFrameRateRangeMake(30, 30, 30);
     if (mode == 2) return CAFrameRateRangeMake(60, 120, 120);
-    const char *explicit_hz = getenv("DM_PRESENT_HZ"), *rt = getenv("TOTK_REALTIME");
-    int hz = explicit_hz ? atoi(explicit_hz) : (rt && !strcmp(rt, "0")) ? 60 : mtl_display_hz();
-    if (hz < 30 || hz > 120) hz = 60;
+    int hz = link_rate1();
     return CAFrameRateRangeMake(hz, hz, hz);
 }
 static int g_link_mode = 1;   // 节拍对象当前的模式：1 / 2 同 g_dm_present_link，3 = 省电模式 30 Hz | Current mode of the display link object: 1 / 2 same as g_dm_present_link, 3 = power-saving mode 30 Hz
@@ -13796,7 +13801,7 @@ uint64_t mtl_udc_saved_bytes(void) { return g_udc_saved_bytes; }
 int mtl_has_window(void) { return front_metal_layer() != NULL; }
 int mtl_link_active(void) { return link_on(); }
 void mtl_link_pause(int on) { CAMetalDisplayLink *l = g_link; if (l) l.paused = on != 0; }   // 测试用（DM_TEST_BG）：模仿系统在后台停掉节拍回调 | For testing (DM_TEST_BG): imitates the system stopping the display-link callback in the background
-int mtl_link_wait_tick(uint64_t timeout_ns, unsigned frame_ticks) {
+static int link_wait(uint64_t timeout_ns, unsigned frame_ticks, int single) {   // single: frame_ticks are ticks of the link itself (TOTK_FPS_CAP), not the game's interval
     if (!mtl_link_active()) return 0;
     // 只在跑得比显示快时才等节拍：上一帧开工之后若已经过了节拍（这一帧已落后），立刻开工，不再白等到下一个节拍——
     // 否则帧时间略大于一个节拍时会「错过节拍 → 再等一整拍」，帧率直接锁到一半（Mac 有窗口负载下实测成串掉帧）
@@ -13810,7 +13815,7 @@ int mtl_link_wait_tick(uint64_t timeout_ns, unsigned frame_ticks) {
     if (g_link_tick_ns && now_ns() - __atomic_load_n(&g_link_tick_ns, __ATOMIC_RELAXED) > STALL_NS) return 0;
     /* TOTK: a frame occupies frame_ticks 60 Hz ticks (the game's present interval); the variable-frame-rate step
        advances game time by exactly that interval, so presenting faster would speed the game up. */
-    const uint64_t step = (uint64_t)(g_dm_present_link == 2 ? 2 : 1) * (frame_ticks ? frame_ticks : 1);   // 一帧占几拍：游戏出图间隔 × 每个 60 Hz 节拍对应的节拍数（120 Hz 节拍为 2） | Ticks per frame: the game's present interval times display-link ticks per 60 Hz tick (2 at 120 Hz)
+    const uint64_t step = (uint64_t)(g_dm_present_link == 2 && !single ? 2 : 1) * (frame_ticks ? frame_ticks : 1);   // 一帧占几拍：游戏出图间隔 × 每个 60 Hz 节拍对应的节拍数（120 Hz 节拍为 2） | Ticks per frame: the game's present interval times display-link ticks per 60 Hz tick (2 at 120 Hz)
     pthread_mutex_lock(&g_link_mu);
     if (g_link_tick_n >= started_tick + step) { started_tick = g_link_tick_n; pthread_mutex_unlock(&g_link_mu); return 1; }
     struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
@@ -13820,6 +13825,14 @@ int mtl_link_wait_tick(uint64_t timeout_ns, unsigned frame_ticks) {
     started_tick = g_link_tick_n;
     pthread_mutex_unlock(&g_link_mu); return 1;
 }
+int mtl_link_wait_tick(uint64_t timeout_ns, unsigned frame_ticks) { return link_wait(timeout_ns, frame_ticks, 0); }
+/* TOTK_FPS_CAP (hle_nvn.c). In the normal mode the link ticks at the display's rate (link_rate1: 120 on the 120 Hz Mac, so the
+   doubling above is DM_PRESENT_LINK=2's alone); when that is the display's own refresh rate the cap counts whole ticks of it,
+   ticks = rate / cap (2 for 60 at 120 Hz), with the rules above: a frame already behind starts at once, so a slow frame runs at
+   its own rate instead of waiting for the next multiple (no drop to 30). Not in the other modes: the power-saving mode ticks at
+   30 Hz and DM_PRESENT_LINK=2 lets the system lower the rate (60..120); the caller then paces by its own clock at the cap. */
+int mtl_link_hz(void) { int scr = mtl_display_hz(), hz = link_rate1(); return scr > 0 && hz == scr ? hz : 0; }
+int mtl_link_wait_ticks(uint64_t timeout_ns, unsigned ticks) { return __atomic_load_n(&g_link_mode, __ATOMIC_RELAXED) == 1 ? link_wait(timeout_ns, ticks, 1) : 0; }
 
 static id<CAMetalDrawable> g_prefetched_drawable; // 合成直画 drawable 用 | Used for compositing straight onto the drawable
 id<CAMetalDrawable> mtl_present_take_prefetched(void) { return g_prefetched_drawable; }

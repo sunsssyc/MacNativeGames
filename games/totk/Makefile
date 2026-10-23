@@ -457,3 +457,8 @@ probe-gpu-sampler-border: runtime-v143
 
 .PHONY: probe-gpu-sampler-border-edge
 probe-gpu-sampler-border-edge: probe-gpu-sampler-border
+
+# CPU-only production frame pacing policy; no ROM, build assets or GPU needed.
+.PHONY: probe-fps-cap
+probe-fps-cap:
+	"$(PY)" scripts/verify_fps_cap.py
