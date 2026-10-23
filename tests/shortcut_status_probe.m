@@ -5,6 +5,8 @@
 #include "../games/totk/third_party/d2r_gfx/gfx/nvn/fps_overlay.h"
 #include <assert.h>
 
+static int settingsPause;
+void runtime_settings_pause(int paused){settingsPause=paused;}
 static int hintClicks;
 BOOL totk_hint_key(NSEvent *e, BOOL down) { if(down&&e.keyCode==28){hintClicks++;return YES;}return NO; }
 void mfx_set(int mode);
@@ -174,7 +176,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
         NSPoint rowPoint=[panel.quickRows[5] convertPoint:NSMakePoint(40,15) toView:host];
         assert([panel hitTest:rowPoint]==panel.quickRows[5]);
         /* A gameplay key held before opening settings must be released through the menu. */
-        [panel.collapseButton performClick:nil];assert(!quickMenuOpen);
+        [panel.collapseButton performClick:nil];assert(!quickMenuOpen);assert(!settingsPause);
         runtime_input_key_synthetic(49,1);assert(keys[49]);
         [panel.collapseButton performClick:nil];assert(quickMenuOpen);
         assert(menu_key(49,0,NO) && !keys[49]);
@@ -198,13 +200,13 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert(menu_key(53,0,YES));
         assert(!menu_key(125,0,YES));
         assert(!panel.hidden&&!fps_overlay_full_hud()&&fps_overlay_hints_enabled());
-        assert(NSHeight(panel.frame)<expandedHeight);assert(!quickMenuOpen);
+        assert(NSHeight(panel.frame)<expandedHeight);assert(!quickMenuOpen);assert(!settingsPause);
         assert(panel.quickTabs.hiddenOrHasHiddenAncestor && panel.quickHelpTitle.hiddenOrHasHiddenAncestor && panel.quickHelpText.hiddenOrHasHiddenAncestor);
         NSPoint outside=NSMakePoint(NSMinX(panel.frame)-5,NSMinY(panel.frame)-5);
         assert([panel hitTest:outside]==nil);
-        assert([panel.collapseButton.title containsString:@"展开"]);
+        assert([panel.collapseButton.title containsString:@"设置"]);
         [panel.collapseButton performClick:nil];
-        assert(fps_overlay_full_hud() && quickMenuOpen);
+        assert(fps_overlay_full_hud() && quickMenuOpen);assert(settingsPause);
         assert(!panel.quickTabs.hiddenOrHasHiddenAncestor && !panel.quickHelpTitle.hiddenOrHasHiddenAncestor);
         assert([panel.collapseButton.title containsString:@"收起"]);
     }
@@ -212,16 +214,21 @@ int main(int argc, const char **argv) { @autoreleasepool {
     hud_publish(HUD_FPS, "FPS 60  2560x1440", 0); hud_publish(HUD_SHADER, "New shaders 3 / total 9", 0);
     press(18); tick(); assert(fps_overlay_hints_enabled() && !fps_overlay_full_hud());
     if (hud_compact()) {
-        assert(!panel.hidden); expect(panel, @"FPS 60  2560x1440");
+        assert(!panel.hidden); expect(panel, @"60 FPS");
+        assert([panel.label.toolTip containsString:@"2560x1440"]);
+        assert(![panel.label.stringValue containsString:@"2560x1440"]);
+        hud_publish(HUD_FPS,"FPS 60+30（上限 60）  2560x1440",0);tick();
+        assert([panel.label.stringValue isEqualToString:@"60+30 FPS"]);
+        assert([panel.label.toolTip containsString:@"上限 60"]);
         assert(![panel.label.stringValue containsString:@"New shaders"] && ![panel.label.stringValue containsString:@"快捷键"]);
     } else assert(panel.hidden);   // corners: the FPS corner stays in the picture, the shortcut box goes
     press(18); tick(); assert(panel.hidden && !fps_overlay_hints_enabled());
-    if(hud_compact())assert(!quickMenuOpen);
+    if(hud_compact())assert(!quickMenuOpen);assert(!settingsPause);
     mfx_set(MFX_MAX); mfx_latch(); tick();
     press(18); tick(); assert(!panel.hidden && fps_overlay_full_hud());
     expect(panel, @"补帧：当前 不限帧");
     hud_publish(0, "60 FPS (30 + 30)", 0); tick();
-    if (hud_compact()) expect(panel, @"60 FPS (30 + 30)");
+    if (hud_compact()) expect(panel, @"60 FPS");
 
     if (argc == 2) {
         NSBitmapImageRep *rep = [panel bitmapImageRepForCachingDisplayInRect:panel.bounds];

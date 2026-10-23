@@ -29,6 +29,21 @@ static void config_tests(void) {
 }
 int main(void) {
     config_tests();
+    /* Resuming a 150 ms settings pause must not feed that interval into the
+       game step (normal long-stall rejection only starts at 250 ms). */
+    _Atomic uint64_t step = 0;
+    _Atomic uint32_t interval = 0;
+    frame_step_data = &step; frame_interval_data = &interval;
+    runtime_frame_step_update(1000000000);
+    runtime_frame_step_update(1016666667);
+    uint64_t before_pause = atomic_load(&step);
+    assert(before_pause && frame_sample_count == 1);
+    runtime_frame_step_update(0);
+    runtime_frame_step_update(1166666667);
+    assert(atomic_load(&step) == before_pause && frame_sample_count == 0);
+    runtime_frame_step_update(1183333334);
+    assert(atomic_load(&step) == before_pause && frame_sample_count == 1);
+    frame_step_data = NULL; frame_interval_data = NULL;
     Module m = {.text_end = 0x58f000, .file_size = 0x600000, .size = 0x604000};
     assert(!posix_memalign((void **)&m.base, 0x4000, m.size)); memset(m.base, 0, m.size);
     uint32_t original = 0x2a1703e9; memcpy(m.base + 0x5848a8, &original, 4);

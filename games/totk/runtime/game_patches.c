@@ -72,6 +72,7 @@ void runtime_frame_step_pin(double ms) {
                  frame_step_data ? "" : " -- but the real-time patch is off, nothing changes");
 }
 void runtime_frame_step_update(uint64_t now_ns) {
+    if (!now_ns) { last_present_ns = 0; frame_sample_count = frame_sample_next = 0; return; }
     if (!frame_step_data || !now_ns) return;
     if (atomic_load_explicit(&pinned_step_us, memory_order_relaxed)) { last_present_ns = now_ns; return; }
     if (!last_present_ns) { last_present_ns = now_ns; return; }

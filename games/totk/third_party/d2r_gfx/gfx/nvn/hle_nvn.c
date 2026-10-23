@@ -2417,6 +2417,7 @@ static void sleep_until_ns(uint64_t dl);
 static uint64_t present_period(const win_t *o);
 static unsigned present_ticks(const win_t *o);
 extern void runtime_frame_step_update(uint64_t now_ns) __attribute__((weak_import));
+extern int runtime_settings_pause_checkpoint(void) __attribute__((weak_import));
 /* Publish completed GPU samples as one word: present reads it on the next frame.
    Keep this independent of trace recording and never wait for GPU completion. */
 static _Atomic uint64_t g_gpu_frame_sample;
@@ -2916,6 +2917,11 @@ static void present_exec(win_t *o, int idx, double period, const int crop[4], ui
 }
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     NVN_BLOCKING();
+    /* No graphics mutex is held here. UI settings may still change atomics while
+       the producer sleeps; queued GPU work can drain independently. */
+    if (runtime_settings_pause_checkpoint && runtime_settings_pause_checkpoint()) {
+        if (runtime_frame_step_update) runtime_frame_step_update(0);
+    }
     (void)q; win_t *o = (win_t *)w; o->presents++;
     totk_tl_frame(o->presents); totk_tl(TL_PRES_IN, (uint64_t)idx, 0);
     if (runtime_frame_step_update) runtime_frame_step_update(now_ns());

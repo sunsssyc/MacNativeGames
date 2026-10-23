@@ -169,7 +169,7 @@ static void front_mouse_update(void){   /* main thread; also runtime/gamepad.m's
  fprintf(stderr,"[totk] mouse %s\n",want?"held by the window (key 7, or Command-Tab, lets it go)":"let go");
 }
 extern void fps_overlay_set_collapsed(int collapsed);
-@interface TOTKShortcutHelp:NSVisualEffectView
+@interface TOTKShortcutHelp:NSView
 @property(strong) NSTextField *label;
 @property(strong) NSButton *collapseButton;
 @property(strong) NSTimer *timer;
@@ -183,16 +183,19 @@ extern void fps_overlay_set_collapsed(int collapsed);
 @property(strong) NSView *quickTabs;
 @property(strong) NSTextField *quickHelpTitle, *quickHelpText, *quickPresetLabel;
 @property(strong) NSView *quickBackdrop;
+@property(strong) NSView *quickDivider;
+@property(strong) NSVisualEffectView *quickBlur;
 @property NSInteger quickTab, quickFocused;
 -(void)toggleCollapsed:(id)sender;
 -(void)position;
+-(void)drawQuickDecoration:(NSRect)dirty;
 -(void)refresh;
 @end
 #include "quick_menu.inc"
 /* Compact HUD (default): mouse-operated game settings, or a collapsed FPS strip. Extra performance readings
    published by gfx/nvn/fps_overlay.c are available on hover. TOTK_HUD=corners retains the legacy shortcut box. */
 @implementation TOTKShortcutHelp
--(void)drawRect:(NSRect)dirty {
+-(void)drawQuickDecoration:(NSRect)dirty {
  (void)dirty;if(!hud_compact()||!fps_overlay_full_hud())return;
  CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds),left=w*0.155,right=w*0.845;
  [[quickInk() colorWithAlphaComponent:0.38] setStroke];
@@ -242,11 +245,12 @@ static NSString *shortcut_text(void){
   runtime_mouse_enabled()?@(TOTK_UI("开（视角、按键，⌘Tab 释放指针）","on (camera, buttons; Command-Tab frees the pointer)")):@(TOTK_UI("关","off"))];
 }
 -(instancetype)initWithFrame:(NSRect)frame{if((self=[super initWithFrame:frame])){int compact=hud_compact();self.wantsLayer=YES;self.layer.backgroundColor=[NSColor colorWithCalibratedWhite:0.04 alpha:compact?0.72:0.86].CGColor;self.layer.cornerRadius=compact?7:14;self.layer.borderWidth=1;self.layer.borderColor=[NSColor colorWithCalibratedWhite:1 alpha:compact?0.14:0.2].CGColor;
- self.label=[NSTextField labelWithString:shortcut_text()];self.label.font=[NSFont systemFontOfSize:17 weight:NSFontWeightMedium];self.label.textColor=NSColor.whiteColor;self.label.alignment=NSTextAlignmentCenter;self.label.maximumNumberOfLines=0;self.label.lineBreakMode=NSLineBreakByWordWrapping;self.label.frame=NSInsetRect(self.bounds,20,18);self.label.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;[self addSubview:self.label];
+ self.label=[TOTKCompactLabel labelWithString:shortcut_text()];self.label.font=[NSFont systemFontOfSize:17 weight:NSFontWeightMedium];self.label.textColor=NSColor.whiteColor;self.label.alignment=NSTextAlignmentCenter;self.label.maximumNumberOfLines=0;self.label.lineBreakMode=NSLineBreakByWordWrapping;self.label.frame=NSInsetRect(self.bounds,20,18);self.label.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;[self addSubview:self.label];
  if(compact){
- self.collapseButton=[NSButton buttonWithTitle:@"" target:self action:@selector(toggleCollapsed:)];
+ self.collapseButton=[TOTKCollapseButton buttonWithTitle:@"" target:self action:@selector(toggleCollapsed:)];
  self.collapseButton.bordered=NO;self.collapseButton.font=[NSFont systemFontOfSize:10];self.collapseButton.contentTintColor=NSColor.whiteColor;
  [self addSubview:self.collapseButton];[self buildQuickMenu];
+ self.quickDivider=[NSView new];self.quickDivider.wantsLayer=YES;self.quickDivider.layer.backgroundColor=[quickInk() colorWithAlphaComponent:0.4].CGColor;[self addSubview:self.quickDivider];
  self.label.autoresizingMask=NSViewNotSizable;self.label.alignment=NSTextAlignmentLeft;self.label.lineBreakMode=NSLineBreakByClipping;}
  [self refresh];__weak TOTKShortcutHelp *weak=self;self.timer=[NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t){(void)t;[weak refresh];}];}return self;}
 -(void)toggleCollapsed:(id)sender{(void)sender;
@@ -254,7 +258,9 @@ static NSString *shortcut_text(void){
 }
 -(void)refresh{
  if(self.collapseButton){BOOL full=fps_overlay_full_hud();
-  self.collapseButton.title=full?@(TOTK_UI("收起 ▴","Hide ▴")):@(TOTK_UI("展开 ▾","Show ▾"));
+  self.collapseButton.title=full?@(TOTK_UI("收起 ▴","Hide ▴")):@(TOTK_UI("设置","Settings"));
+  self.collapseButton.image=full?nil:[NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:nil];
+  self.collapseButton.imagePosition=NSImageLeft;self.collapseButton.font=quickFont(12);
   self.collapseButton.toolTip=full?@(TOTK_UI("收起为 FPS；按 1 可完全隐藏","Collapse to FPS; press 1 to hide all")):@(TOTK_UI("展开游戏设置","Expand game settings"));
   self.collapseButton.accessibilityLabel=self.collapseButton.toolTip;
  }
@@ -270,9 +276,9 @@ static NSString *shortcut_text(void){
 -(void)layout{[super layout];[self position];}
 -(void)position{if(!self.superview)return;NSRect f,in;
  if(hud_compact()){
-  BOOL full=fps_overlay_full_hud();CGFloat w=MIN(280,NSWidth(self.superview.bounds)-24),h=36;
-  f=full?self.superview.bounds:NSMakeRect(NSWidth(self.superview.bounds)-w-12,NSHeight(self.superview.bounds)-h-12,w,h);
-  in=NSMakeRect(16,10,w-92,16);
+  BOOL full=fps_overlay_full_hud();CGFloat w=MIN(190,NSWidth(self.superview.bounds)-40),h=32;
+  f=full?self.superview.bounds:NSMakeRect(NSWidth(self.superview.bounds)-w-20,NSHeight(self.superview.bounds)-h-20,w,h);
+  in=NSMakeRect(0,2,w-94,28);
  }else{CGFloat w=MIN(560,MAX(280,self.superview.bounds.size.width-40)),h=240;f=NSMakeRect(floor((self.superview.bounds.size.width-w)/2),floor((self.superview.bounds.size.height-h)/2),w,h);in=NSInsetRect(NSMakeRect(0,0,w,h),20,18);}
  if(!NSEqualRects(self.frame,f))self.frame=f;self.label.frame=in;
  if(self.collapseButton)[self layoutQuickMenu];

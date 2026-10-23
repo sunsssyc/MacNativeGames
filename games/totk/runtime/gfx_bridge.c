@@ -1,5 +1,6 @@
 /* Bind the donor graphics interface to this native runtime, without donor game hooks. */
 #include "runtime.h"
+#include "settings_pause.inc"
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include <stdio.h>

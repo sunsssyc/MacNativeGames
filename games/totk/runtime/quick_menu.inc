@@ -6,6 +6,7 @@ extern void settings_quick_open(void) __attribute__((weak_import));
 extern int nvn_fps_cap(void) __attribute__((weak_import));
 extern int runtime_drs_enabled(void) __attribute__((weak_import));
 extern float runtime_drs_min(void) __attribute__((weak_import));
+extern void runtime_settings_pause(int paused) __attribute__((weak_import));
 static NSString *pad_type_text(void);
 void runtime_input_key_synthetic(unsigned code,int down);
 @interface TOTKShortcutHelp (QuickMenu)
@@ -20,11 +21,39 @@ static NSColor *quickAccent(void){return [NSColor colorWithCalibratedRed:0.88 gr
 static NSColor *quickGold(void){return [NSColor colorWithCalibratedRed:1 green:0.9 blue:0.50 alpha:1];}
 static NSColor *quickInk(void){return [NSColor colorWithCalibratedRed:0.99 green:0.975 blue:0.85 alpha:1];}
 static NSFont *quickFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-Regular" size:size]?:[NSFont systemFontOfSize:size];}
+// Shared text metrics keep the compact label and settings title on one baseline.
+static NSDictionary *compactAttributes(void){return @{NSFontAttributeName:quickFont(12),NSForegroundColorAttributeName:quickInk()};}
+@interface TOTKCompactLabel:NSTextField
+@end
+@implementation TOTKCompactLabel
+-(void)drawRect:(NSRect)dirty{
+ if(!hud_compact()||fps_overlay_full_hud()){[super drawRect:dirty];return;}
+ NSDictionary *a=compactAttributes();NSSize size=[self.stringValue sizeWithAttributes:a];
+ [self.stringValue drawAtPoint:NSMakePoint(NSWidth(self.bounds)-size.width,(NSHeight(self.bounds)-size.height)/2) withAttributes:a];
+}
+@end
+@interface TOTKCollapseButton:NSButton
+@end
+@implementation TOTKCollapseButton
+-(void)drawRect:(NSRect)dirty{
+ if(fps_overlay_full_hud()){[super drawRect:dirty];return;}
+ NSDictionary *a=compactAttributes();NSSize size=[self.title sizeWithAttributes:a];CGFloat h=NSHeight(self.bounds);
+ [self.title drawAtPoint:NSMakePoint(27,(h-size.height)/2) withAttributes:a];
+ NSImage *gear=[NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:nil];
+ NSImageSymbolConfiguration *cfg=[NSImageSymbolConfiguration configurationWithPaletteColors:@[quickInk()]];
+ gear=[gear imageWithSymbolConfiguration:cfg];[gear drawInRect:NSMakeRect(5,(h-14)/2,14,14) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:self.highlighted?0.65:1 respectFlipped:YES hints:nil];
+}
+@end
+@interface TOTKQuickBlur:NSVisualEffectView
+@end
+@implementation TOTKQuickBlur
+-(NSView *)hitTest:(NSPoint)p{(void)p;return nil;}
+@end
 @interface TOTKQuickDecoration:NSView
 @end
 @implementation TOTKQuickDecoration
 -(NSView *)hitTest:(NSPoint)p{(void)p;return nil;}
--(void)drawRect:(NSRect)dirty{[(TOTKShortcutHelp *)self.superview drawRect:dirty];}
+-(void)drawRect:(NSRect)dirty{[(TOTKShortcutHelp *)self.superview drawQuickDecoration:dirty];}
 @end
 static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAlignment alignment){
  NSMutableParagraphStyle *p=[NSMutableParagraphStyle new];p.alignment=alignment;p.lineBreakMode=NSLineBreakByTruncatingTail;
@@ -88,7 +117,7 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
 @implementation TOTKShortcutHelp (QuickMenu)
 -(void)buildQuickMenu{
  self.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];self.quickTab=0;self.quickFocused=0;
- self.material=NSVisualEffectMaterialHUDWindow;self.blendingMode=NSVisualEffectBlendingModeWithinWindow;self.state=NSVisualEffectStateActive;
+ self.quickBlur=[TOTKQuickBlur new];self.quickBlur.material=NSVisualEffectMaterialHUDWindow;self.quickBlur.blendingMode=NSVisualEffectBlendingModeWithinWindow;self.quickBlur.state=NSVisualEffectStateActive;[self addSubview:self.quickBlur positioned:NSWindowBelow relativeTo:self.label];
  self.quickBackdrop=[TOTKQuickDecoration new];[self addSubview:self.quickBackdrop positioned:NSWindowBelow relativeTo:self.label];
  self.quickTitle=[NSTextField labelWithString:@(TOTK_UI("游戏设置","Game settings"))];self.quickTitle.font=quickFont(27);self.quickTitle.textColor=quickInk();self.quickTitle.alignment=NSTextAlignmentCenter;[self addSubview:self.quickTitle];
  self.quickTabs=[NSView new];[self addSubview:self.quickTabs];
@@ -126,8 +155,9 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
 }
 -(void)layoutQuickMenu{
  CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);BOOL full=fps_overlay_full_hud();
- self.collapseButton.frame=NSMakeRect(w-80,h-35,70,25);if(!full)return;
- self.quickBackdrop.frame=self.bounds;
+ self.collapseButton.frame=full?NSMakeRect(w-80,h-35,70,25):NSMakeRect(w-80,2,80,28);
+ self.quickDivider.hidden=full;self.quickDivider.frame=NSMakeRect(w-88,9,0.7,14);if(!full)return;
+ self.quickBackdrop.frame=self.bounds;self.quickBlur.frame=self.bounds;
  self.quickTitle.frame=NSMakeRect(80,h*0.89,w-160,36);
  CGFloat tw=MIN(420,w-80);self.quickTabs.frame=NSMakeRect((w-tw)/2,h*0.795,tw,40);
  for(NSView *v in self.quickTabs.subviews)v.frame=NSMakeRect(v.tag*tw/3,0,tw/3,40);
@@ -162,6 +192,7 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
 -(void)quickHint:(id)sender{(void)sender;NSEvent *e=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:self.window.windowNumber context:nil characters:@"8" charactersIgnoringModifiers:@"8" isARepeat:NO keyCode:28];totk_hint_key(e,YES);}
 -(void)refreshQuickMenu {
  BOOL full=fps_overlay_full_hud();quickMenuOpen=full&&!self.hidden;
+ if(runtime_settings_pause)runtime_settings_pause(quickMenuOpen&&(!bootOverlay||bootOverlay.hidden));
  if(window&&[window.contentView isKindOfClass:TOTKInputView.class]){
   BOOL hide=!quickMenuOpen&&window.isKeyWindow&&(window.styleMask&NSWindowStyleMaskFullScreen);
   TOTKInputView *input=(TOTKInputView *)window.contentView;
@@ -170,8 +201,8 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  self.collapseButton.contentTintColor=quickInk();
  self.quickTitle.hidden=self.quickScroll.hidden=self.quickNote.hidden=self.quickTabs.hidden=self.quickHelpTitle.hidden=self.quickHelpText.hidden=self.quickReturn.hidden=self.quickBackdrop.hidden=!full;
  self.label.hidden=full;
- self.layer.backgroundColor=[NSColor colorWithCalibratedRed:0.04 green:0.045 blue:0.03 alpha:full?0.62:0.8].CGColor;
- self.state=full?NSVisualEffectStateActive:NSVisualEffectStateInactive;self.layer.cornerRadius=full?0:6;self.layer.borderWidth=full?0:1;
+ self.layer.backgroundColor=[NSColor colorWithCalibratedRed:0.04 green:0.045 blue:0.03 alpha:full?0.62:0].CGColor;
+ self.quickBlur.hidden=!full;self.layer.cornerRadius=0;self.layer.borderWidth=0;
  self.quickPresets.hidden=self.quickPresetLabel.hidden=self.quickTab!=0;
  self.quickHint.hidden=self.quickSettings.hidden=self.quickTab!=2;
  for(NSUInteger i=0;i<self.quickRows.count;i++)self.quickRows[i].hidden=self.quickTab!=(i<6?0:1);
@@ -179,8 +210,19 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  int preset=settings_quick_preset?settings_quick_preset():-1;
  for(NSButton *b in self.quickPresets.subviews){b.state=b.tag==preset?NSControlStateValueOn:NSControlStateValueOff;b.needsDisplay=YES;}
  char line[128];int highlight=0;NSString *fps=hud_snapshot(0,line,sizeof line,&highlight)?@(line):@"FPS --";
- self.label.stringValue=fps;self.label.font=[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];self.label.textColor=quickInk();
- NSMutableArray *details=[NSMutableArray new];for(int i=1;i<4;i++){char t[128];int hl;if(hud_snapshot(i,t,sizeof t,&hl))[details addObject:@(t)];}self.label.toolTip=[details componentsJoinedByString:@"\n"];
+ // Only the measured frame rate belongs in the compact HUD; retain the full line in its tooltip.
+ NSString *rate=@"--";
+ NSArray *tokens=[fps componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+ if(tokens.count>1){
+  NSString *value=[tokens[0] isEqualToString:@"FPS"]?tokens[1]:tokens[0];
+  NSRange end=[value rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789+-"] invertedSet]];
+  rate=end.location==NSNotFound?value:[value substringToIndex:end.location];if(!rate.length)rate=@"--";
+ }
+ self.label.stringValue=[NSString stringWithFormat:@"%@ FPS",rate];
+ self.label.font=[NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];self.label.textColor=quickInk();self.label.alignment=NSTextAlignmentRight;
+ NSShadow *shadow=[NSShadow new];shadow.shadowColor=[NSColor colorWithWhite:0 alpha:0.85];shadow.shadowOffset=NSMakeSize(0,-1);shadow.shadowBlurRadius=3;
+ self.label.shadow=full?nil:shadow;self.collapseButton.shadow=full?nil:shadow;
+ NSMutableArray *details=[NSMutableArray arrayWithObject:fps];for(int i=1;i<4;i++){char t[128];int hl;if(hud_snapshot(i,t,sizeof t,&hl))[details addObject:@(t)];}self.label.toolTip=[details componentsJoinedByString:@"\n"];
  self.textSize=NSMakeSize(0,16);
  if(full){
   NSArray *names=@[@(TOTK_UI("帧率上限","Frame limit")),@(TOTK_UI("动态分辨率","Dynamic resolution")),@(TOTK_UI("补帧","Frame generation")),@(TOTK_UI("渲染分辨率","Render resolution")),@(TOTK_UI("画面比例","Aspect ratio")),@(TOTK_UI("边缘平滑","Edge smoothing")),@(TOTK_UI("手柄类型","Controller")),@(TOTK_UI("鼠标视角","Mouse camera"))];

@@ -50,6 +50,7 @@ void runtime_frame_step_pin(double ms){
 }
 static void drs_update(uint64_t now_ns);
 void runtime_frame_step_update(uint64_t now_ns){
+    if (!now_ns) { last_present_ns = 0; frame_sample_count = frame_sample_next = 0; drs_update(0); return; }
     drs_update(now_ns);
     if(!frame_step_data||!now_ns)return;
     if(atomic_load_explicit(&pinned_step_us,memory_order_relaxed)){last_present_ns=now_ns;return;}
@@ -509,7 +510,8 @@ static void drs_update(uint64_t now_ns) {
     static unsigned revision = ~0u;
     static uint32_t gpu_seen;
     static int have_gpu, was_on;
-    if (!atomic_load(&drs_data) || !now_ns) return;
+    if (!now_ns) { prev = 0; have_gpu = 0; revision = ~0u; return; }
+    if (!atomic_load(&drs_data)) return;
     double now = now_ns * 1e-9;
     unsigned requested = atomic_load(&drs_revision);
     if (revision != requested) {

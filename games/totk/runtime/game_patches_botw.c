@@ -149,6 +149,7 @@ static void pad_tick_advance(void) {
     }
 }
 void runtime_frame_step_update(uint64_t now_ns) {
+    if (!now_ns) { last_present_ns = 0; frame_sample_count = frame_sample_next = 0; return; }
 #ifdef GAME_BOTW190
     botw_aspect_apply();   /* key 4 */
 #endif

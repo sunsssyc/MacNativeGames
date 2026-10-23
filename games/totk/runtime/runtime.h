@@ -32,7 +32,10 @@ void runtime_swkbd_probe(void);
 void runtime_swkbd_selftest(void);
 void runtime_dump_threads(void);   /* threads.c: every guest thread's wait state and guest return chain (TOTK_INPUT_FILE "threads") */   /* diagnostic "kbtest": show the text entry bar from a thread of its own */
 void runtime_frame_step_pin(double ms);                  /* game_patches.c: pin the real-time frame step (diagnostics), 0 = real time */
-void runtime_frame_step_update(uint64_t now_ns);
+void runtime_frame_step_update(uint64_t now_ns); /* 0 resets timing after a host pause */
+void runtime_settings_pause(int on); /* nonblocking request; does not alter other pause causes */
+int runtime_settings_paused(void); /* frame producer has reached the cooperative wait */
+int runtime_settings_pause_checkpoint(void); /* present thread only; returns whether it waited */
 void runtime_thread_note_hle(unsigned index);            /* threads.c: the calling guest thread's last host call (hletrace) */
 uint32_t runtime_thread_current_handle(void);            /* threads.c: handle of the calling guest thread, 0 on a host thread */
 void *runtime_hle_wrap_named(void *fn, const char *name);/* hle_stack.c: runtime_hle_wrap with a name for diagnostics */
