@@ -340,6 +340,10 @@ int mtl_warm_wait(int timeout_ms);
 int mtl_link_active(void);
 /* frame_ticks: 60 Hz ticks one game frame occupies (the game's present interval; 1 in display mode). */
 int mtl_link_wait_tick(uint64_t timeout_ns, unsigned frame_ticks);
+/* TOTK_FPS_CAP (hle_nvn.c): the display link's rate in its normal mode when it is the display's own refresh rate (0: none), and a
+   wait for whole ticks of it with mtl_link_wait_tick's rules (0 at once in the other link modes: the caller uses its own clock). */
+int mtl_link_hz(void);
+int mtl_link_wait_ticks(uint64_t timeout_ns, unsigned ticks);
 double mtl_presented_time(uint64_t n);
    // 第 n 次出图（从 1 计）的实际呈现时刻（秒）；0 = 未就绪，−1 = 被丢弃
    // Actual presentation time (seconds) of the n-th present (counted from 1); 0 = not ready, −1 = dropped
