@@ -26,3 +26,6 @@ games/totk/tools/totk_xlate/obj/
 games/totk/tools/totk_xlate/bin/
 games/totk/scripts/shader_inventory/obj/
 games/totk/scripts/shader_inventory/bin/
+
+# the hint assistant's local test copy of a save (games/totk/tools/hint_assistant): never committed
+/test-data/
