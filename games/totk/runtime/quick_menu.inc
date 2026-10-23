@@ -10,9 +10,9 @@ void runtime_input_key_synthetic(unsigned code,int down);
 -(void)refreshQuickMenu;
 -(void)quickAction:(NSButton *)sender;
 @end
-static NSColor *quickAccent(void) { return [NSColor colorWithCalibratedRed:0.62 green:0.83 blue:0.72 alpha:1]; }
-static NSColor *quickGold(void) { return [NSColor colorWithCalibratedRed:0.78 green:0.73 blue:0.55 alpha:1]; }
-static NSColor *quickInk(void) { return [NSColor colorWithCalibratedRed:0.94 green:0.91 blue:0.83 alpha:1]; }
+static NSColor *quickAccent(void) { return [NSColor colorWithCalibratedRed:1 green:0.97 blue:0.82 alpha:1]; }
+static NSColor *quickGold(void) { return [NSColor colorWithCalibratedRed:1 green:0.86 blue:0.32 alpha:1]; }
+static NSColor *quickInk(void) { return [NSColor colorWithCalibratedRed:1 green:0.985 blue:0.87 alpha:1]; }
 @interface TOTKQuickRow : NSButton
 @property(copy) NSString *value;
 @property BOOL hovered;
@@ -28,42 +28,45 @@ static NSColor *quickInk(void) { return [NSColor colorWithCalibratedRed:0.94 gre
 -(void)mouseEntered:(NSEvent *)e {(void)e;self.hovered=YES;self.needsDisplay=YES;}
 -(void)mouseExited:(NSEvent *)e {(void)e;self.hovered=NO;self.needsDisplay=YES;}
 -(void)drawRect:(NSRect)dirty {
- (void)dirty;
- BOOL hot=self.hovered||self.highlighted;
- [[NSColor colorWithCalibratedRed:0.66 green:0.69 blue:0.53 alpha:hot?0.15:0.025] setFill];
- [[NSBezierPath bezierPathWithRect:NSInsetRect(self.bounds,0,1)] fill];
- [[NSColor colorWithCalibratedRed:0.73 green:0.68 blue:0.49 alpha:hot?0.65:0.13] setStroke];
- NSBezierPath *rule=[NSBezierPath bezierPath];rule.lineWidth=0.5;
- [rule moveToPoint:NSMakePoint(0,1)];[rule lineToPoint:NSMakePoint(NSWidth(self.bounds),1)];[rule stroke];
- if(hot){[quickGold() setFill];[[NSBezierPath bezierPathWithRect:NSMakeRect(0,4,2,NSHeight(self.bounds)-8)] fill];}
+ (void)dirty;BOOL hot=self.enabled&&(self.hovered||self.highlighted);
+ CGFloat w=NSWidth(self.bounds),split=w*0.49;
+ [[NSColor colorWithCalibratedWhite:0.85 alpha:0.13] setFill];
+ [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,0,1) xRadius:2 yRadius:2] fill];
+ NSRect valueBox=NSMakeRect(split,3,w-split-3,NSHeight(self.bounds)-6);
+ [[NSColor colorWithCalibratedWhite:0.035 alpha:0.85] setFill];[[NSBezierPath bezierPathWithRoundedRect:valueBox xRadius:2 yRadius:2] fill];
+ NSRect choice=NSInsetRect(valueBox,3,3);
+ [[NSColor colorWithCalibratedRed:0.82 green:0.36 blue:0.015 alpha:self.enabled?0.96:0.12] setFill];[[NSBezierPath bezierPathWithRect:choice] fill];
+ if(hot){[NSGraphicsContext saveGraphicsState];NSShadow *glow=[NSShadow new];glow.shadowColor=[quickGold() colorWithAlphaComponent:0.6];glow.shadowBlurRadius=5;[glow set];
+  [quickGold() setStroke];NSBezierPath *edge=[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(valueBox,0.5,0.5) xRadius:2 yRadius:2];edge.lineWidth=2;[edge stroke];[NSGraphicsContext restoreGraphicsState];}
  NSColor *ink=self.enabled?quickInk():NSColor.disabledControlTextColor;
- [self.title drawAtPoint:NSMakePoint(11,12) withAttributes:@{NSFontAttributeName:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium],NSForegroundColorAttributeName:ink}];
- NSMutableParagraphStyle *right=[NSMutableParagraphStyle new];right.alignment=NSTextAlignmentRight;right.lineBreakMode=NSLineBreakByTruncatingTail;
- [(self.value?:@"") drawInRect:NSMakeRect(118,11,NSWidth(self.bounds)-146,18) withAttributes:@{NSFontAttributeName:[NSFont systemFontOfSize:11],NSForegroundColorAttributeName:self.enabled?(hot?quickGold():quickAccent()):ink,NSParagraphStyleAttributeName:right}];
- [@"›" drawAtPoint:NSMakePoint(NSWidth(self.bounds)-18,10) withAttributes:@{NSFontAttributeName:[NSFont systemFontOfSize:15],NSForegroundColorAttributeName:quickGold()}];
+ NSMutableParagraphStyle *style=[NSMutableParagraphStyle new];style.lineBreakMode=NSLineBreakByTruncatingTail;
+ [self.title drawInRect:NSMakeRect(12,10,split-22,20) withAttributes:@{NSFontAttributeName:[NSFont systemFontOfSize:14],NSForegroundColorAttributeName:ink,NSParagraphStyleAttributeName:style}];
+ style.alignment=NSTextAlignmentCenter;
+ [(self.value?:@"") drawInRect:NSMakeRect(split+10,10,w-split-34,20) withAttributes:@{NSFontAttributeName:[NSFont systemFontOfSize:13 weight:NSFontWeightMedium],NSForegroundColorAttributeName:ink,NSParagraphStyleAttributeName:style}];
+ [@"▸" drawAtPoint:NSMakePoint(w-20,10) withAttributes:@{NSFontAttributeName:[NSFont systemFontOfSize:13],NSForegroundColorAttributeName:ink}];
 }
 @end
 @interface TOTKQuickPreset : TOTKQuickRow
 @end
 @implementation TOTKQuickPreset
 -(void)drawRect:(NSRect)dirty {
- (void)dirty;BOOL hot=self.hovered||self.highlighted;
- [[NSColor colorWithCalibratedRed:0.48 green:0.60 blue:0.46 alpha:hot?0.25:0.07] setFill];
+ (void)dirty;BOOL hot=self.enabled&&(self.hovered||self.highlighted);
+ [[NSColor colorWithCalibratedWhite:0.025 alpha:0.8] setFill];
  NSRect rect=NSInsetRect(self.bounds,0.5,1.5);[[NSBezierPath bezierPathWithRect:rect] fill];
- [[quickGold() colorWithAlphaComponent:hot?0.9:0.35] setStroke];NSBezierPath *edge=[NSBezierPath bezierPathWithRect:rect];edge.lineWidth=0.5;[edge stroke];
+ [[quickGold() colorWithAlphaComponent:hot?1:0.25] setStroke];NSBezierPath *edge=[NSBezierPath bezierPathWithRect:rect];edge.lineWidth=hot?2.5:0.8;[edge stroke];
  NSMutableParagraphStyle *center=[NSMutableParagraphStyle new];center.alignment=NSTextAlignmentCenter;
  [self.title drawInRect:NSInsetRect(self.bounds,2,7) withAttributes:@{NSFontAttributeName:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium],NSForegroundColorAttributeName:self.enabled?quickInk():NSColor.disabledControlTextColor,NSParagraphStyleAttributeName:center}];
 }
 @end
 @implementation TOTKShortcutHelp (QuickMenu)
 -(NSTextField *)quickCaption:(NSString *)text y:(CGFloat)y {
- NSTextField *v=[NSTextField labelWithString:text];v.font=[NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];v.textColor=[quickGold() colorWithAlphaComponent:0.85];v.frame=NSMakeRect(4,y,300,18);[self.quickBody addSubview:v];return v;
+ NSTextField *v=[NSTextField labelWithString:text];v.font=[NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];v.textColor=[quickInk() colorWithAlphaComponent:0.7];v.frame=NSMakeRect(4,y,300,18);[self.quickBody addSubview:v];return v;
 }
 -(void)buildQuickMenu {
  self.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
- self.layer.backgroundColor=[NSColor colorWithCalibratedRed:0.035 green:0.065 blue:0.055 alpha:0.94].CGColor;self.layer.cornerRadius=5;
- self.layer.borderColor=[quickGold() colorWithAlphaComponent:0.35].CGColor;
- self.quickTitle=[NSTextField labelWithString:@(TOTK_UI("游戏设置","Game settings"))];self.quickTitle.font=[NSFont fontWithName:@"Songti SC" size:19]?:[NSFont systemFontOfSize:18 weight:NSFontWeightMedium];self.quickTitle.textColor=quickInk();[self addSubview:self.quickTitle];
+ self.layer.backgroundColor=[NSColor colorWithCalibratedRed:0.11 green:0.12 blue:0.13 alpha:0.88].CGColor;self.layer.cornerRadius=4;
+ self.layer.borderColor=[quickInk() colorWithAlphaComponent:0.18].CGColor;
+ self.quickTitle=[NSTextField labelWithString:@(TOTK_UI("游戏设置","Game settings"))];self.quickTitle.font=[NSFont systemFontOfSize:20 weight:NSFontWeightMedium];self.quickTitle.textColor=[NSColor colorWithCalibratedWhite:0.07 alpha:1];self.quickTitle.alignment=NSTextAlignmentCenter;[self addSubview:self.quickTitle];
  self.quickScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect];self.quickScroll.drawsBackground=NO;self.quickScroll.hasVerticalScroller=YES;self.quickScroll.scrollerStyle=NSScrollerStyleOverlay;self.quickScroll.autohidesScrollers=YES;
  self.quickBody=[[NSView alloc] initWithFrame:NSMakeRect(0,0,336,414)];self.quickScroll.documentView=self.quickBody;[self addSubview:self.quickScroll];
  self.quickPresets=[[NSView alloc] initWithFrame:NSMakeRect(0,380,334,30)];
@@ -82,7 +85,7 @@ static NSColor *quickInk(void) { return [NSColor colorWithCalibratedRed:0.94 gre
  [self quickCaption:@(TOTK_UI("操作","CONTROLS")) y:103];
  self.quickHint=[TOTKQuickPreset buttonWithTitle:@(TOTK_UI("✦  卡关助手","✦  Hint assistant")) target:self action:@selector(quickHint:)];self.quickHint.bordered=NO;self.quickHint.font=[NSFont systemFontOfSize:11 weight:NSFontWeightMedium];self.quickHint.contentTintColor=quickAccent();[self addSubview:self.quickHint];
  self.quickSettings=[TOTKQuickPreset buttonWithTitle:@(TOTK_UI("全部设置…  ⌘,","All settings…  ⌘,")) target:self action:@selector(quickSettings:)];self.quickSettings.bordered=NO;self.quickSettings.font=[NSFont systemFontOfSize:11];self.quickSettings.enabled=settings_quick_open!=NULL;[self addSubview:self.quickSettings];
- self.quickNote=[NSTextField labelWithString:@(TOTK_UI("即时调整 · 按 1 收起 / 隐藏","Live controls · 1 to collapse / hide"))];self.quickNote.font=[NSFont systemFontOfSize:10];self.quickNote.textColor=NSColor.secondaryLabelColor;[self addSubview:self.quickNote];
+ self.quickNote=[NSTextField labelWithString:@(TOTK_UI("即时调整 · 按 1 收起 / 隐藏","Live controls · 1 to collapse / hide"))];self.quickNote.font=[NSFont systemFontOfSize:10];self.quickNote.textColor=[NSColor colorWithCalibratedWhite:0.15 alpha:1];[self addSubview:self.quickNote];
  [self.quickBody scrollPoint:NSMakePoint(0,NSHeight(self.quickBody.bounds))];
 }
 -(void)quickPreset:(NSButton *)sender {
@@ -111,6 +114,7 @@ static NSColor *quickInk(void) { return [NSColor colorWithCalibratedRed:0.94 gre
   TOTKInputView *input=(TOTKInputView *)window.contentView;
   if(input.cursorAutoHideActive!=hide)[input setCursorAutoHideEnabled:hide];front_mouse_update();
  }
+ self.collapseButton.contentTintColor=full?[NSColor colorWithCalibratedWhite:0.1 alpha:1]:quickInk();
  self.quickTitle.hidden=self.quickScroll.hidden=self.quickSettings.hidden=self.quickHint.hidden=self.quickNote.hidden=!full;
  char line[128];int highlight=0;NSString *fps=hud_snapshot(0,line,sizeof line,&highlight)?@(line):@"FPS --";
  self.label.stringValue=fps;self.label.font=[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];self.label.textColor=quickAccent();

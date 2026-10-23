@@ -189,14 +189,12 @@ extern void fps_overlay_set_collapsed(int collapsed);
 -(void)drawRect:(NSRect)dirty {
  (void)dirty;if(!hud_compact()||!fps_overlay_full_hud())return;
  CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);
- [[NSColor colorWithCalibratedRed:0.73 green:0.68 blue:0.49 alpha:0.7] setStroke];
- NSBezierPath *corners=[NSBezierPath bezierPath];corners.lineWidth=1;
- for(int i=0;i<4;i++){CGFloat x=i&1?w-7:7,y=i&2?h-7:7,dx=i&1?-1:1,dy=i&2?-1:1;
-  [corners moveToPoint:NSMakePoint(x,y+dy*13)];[corners lineToPoint:NSMakePoint(x,y)];[corners lineToPoint:NSMakePoint(x+dx*13,y)];}
- [corners stroke];
- NSBezierPath *rule=[NSBezierPath bezierPath];rule.lineWidth=0.5;
- [rule moveToPoint:NSMakePoint(16,h-67)];[rule lineToPoint:NSMakePoint(w-16,h-67)];
- [rule moveToPoint:NSMakePoint(16,65)];[rule lineToPoint:NSMakePoint(w-16,65)];[rule stroke];
+ [quickInk() setFill];
+ [[NSBezierPath bezierPathWithRect:NSMakeRect(0,h-40,w,40)] fill];
+ [[NSBezierPath bezierPathWithRect:NSMakeRect(0,0,w,63)] fill];
+ // A restrained geometric divider echoes the original options screen without copied game assets.
+ [[quickInk() colorWithAlphaComponent:0.35] setStroke];NSBezierPath *line=[NSBezierPath bezierPath];line.lineWidth=0.5;
+ [line moveToPoint:NSMakePoint(16,h-68)];[line lineToPoint:NSMakePoint(w-16,h-68)];[line stroke];
 }
 /* Key 6 (runtime/gamepad.m): the controller type; auto says what it takes the connected controller for. */
 static NSString *pad_type_text(void){
@@ -257,17 +255,17 @@ static NSString *shortcut_text(void){
 -(void)layout{[super layout];[self position];}
 -(void)position{if(!self.superview)return;NSRect f,in;
  if(hud_compact()){
-  BOOL full=fps_overlay_full_hud();CGFloat w=full?360:280,m=12;
+  BOOL full=fps_overlay_full_hud();CGFloat w=full?520:280,m=12;
   w=MIN(w,MAX(240,self.superview.bounds.size.width-2*m));
   CGFloat h=full?MIN(552,MAX(120,self.superview.bounds.size.height-2*m)):36;
-  f=NSMakeRect(floor(self.superview.bounds.size.width-w-m),floor(self.superview.bounds.size.height-h-m),w,h);
+  f=full?NSMakeRect(floor((self.superview.bounds.size.width-w)/2),floor((self.superview.bounds.size.height-h)/2),w,h):NSMakeRect(floor(self.superview.bounds.size.width-w-m),floor(self.superview.bounds.size.height-h-m),w,h);
   in=NSMakeRect(16,full?h-61:10,w-92,16);
  }else{CGFloat w=MIN(560,MAX(280,self.superview.bounds.size.width-40)),h=240;f=NSMakeRect(floor((self.superview.bounds.size.width-w)/2),floor((self.superview.bounds.size.height-h)/2),w,h);in=NSInsetRect(NSMakeRect(0,0,w,h),20,18);}
  if(!NSEqualRects(self.frame,f))self.frame=f;self.label.frame=in;
  if(self.collapseButton){
   CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);
   self.collapseButton.frame=NSMakeRect(w-68,h-30,58,24);
-  self.quickTitle.frame=NSMakeRect(16,h-33,w-94,22);
+  self.quickTitle.frame=NSMakeRect(72,h-32,w-144,26);
   self.quickScroll.frame=NSMakeRect(12,63,w-24,MAX(0,h-137));
   CGFloat bodyWidth=NSWidth(self.quickScroll.contentView.bounds);
   [self.quickBody setFrameSize:NSMakeSize(bodyWidth,414)];
