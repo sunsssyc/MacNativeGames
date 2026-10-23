@@ -313,10 +313,14 @@ static void note_occlusion(const char *when){int v=(window.occlusionState&NSWind
 static TOTKWindowDelegate *windowDelegate;
 int runtime_front_window_visible(void){return atomic_load(&windowVisible);}
 void runtime_front_request_close(void){dispatch_async(dispatch_get_main_queue(), ^{[window performClose:nil];});}
+/* "设置…" (Command-,) at the top of the app menu: runtime/settings_panel.m; without it (the AppKit tests that include this
+   file) the app menu has no such item. */
+__attribute__((weak)) void settings_panel_menu(NSMenu *appMenu){(void)appMenu;}
 /* Use the window-close path, not terminate:, so Command-Q also waits for active saves. */
 static void front_install_menu(void){
  NSMenu *menu=[NSMenu new],*appMenu=[NSMenu new];
  NSMenuItem *appItem=[NSMenuItem new];appItem.submenu=appMenu;[menu addItem:appItem];
+ settings_panel_menu(appMenu);
  NSMenuItem *quit=[[NSMenuItem alloc] initWithTitle:@(TOTK_UI("退出 " GAME_NAME,"Quit " GAME_NAME)) action:@selector(performClose:) keyEquivalent:@"q"];
  quit.keyEquivalentModifierMask=NSEventModifierFlagCommand;quit.target=window;
  [appMenu addItem:quit];front_menubar_fps_add(menu);NSApp.mainMenu=menu;

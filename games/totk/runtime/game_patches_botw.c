@@ -651,6 +651,15 @@ int runtime_output_mode_cycle(void) {
     fprintf(stderr, "[botw] key 3: %s\n", next ? "MetalFX 2K" : "关闭 2K");
     return 1;
 }
+/* The settings window (runtime/settings_panel.m): key 3's mode directly, 0 off or 1 MetalFX 2K; 0 for native 2K (2). */
+int runtime_output_mode_set(int mode) {
+    extern void dm_gfx_set_flag(const char *name, int value);
+    if (mode != 0 && mode != 1) return 0;
+    dm_gfx_set_flag("mfx_output", mode);
+    dm_gfx_set_flag("mfx_upscale", mode);
+    fprintf(stderr, "[botw] settings: picture %s\n", mode ? "MetalFX 2K" : "关闭 2K");
+    return 1;
+}
 #ifdef GAME_BOTW190
 /* Key 4 (runtime/input.c): ultrawide on / off (TOTK_ASPECT, default 21:9; also 32:9, 3440x1440 or 2.39; TOTK_ASPECT set
    also starts with it on). The game keeps drawing into its 16:9 canvas with the main camera's aspect ratio set to the wider
@@ -711,9 +720,17 @@ int runtime_aspect_toggle(void) {
    the panel sees step 0 or 2 and the window size is not followed. */
 int runtime_aspect_step(void) { return g_uw_main ? (atomic_load(&g_uw_on) ? 2 : 0) : -1; }
 void runtime_aspect_view(double w, double h) { (void)w; (void)h; }
+/* The settings window (runtime/settings_panel.m): 16:9 (step 0) or wide (step 2) directly; there is no fit step here. */
+int runtime_aspect_set(int step) {
+    if (!g_uw_main || (step != 0 && step != 2)) return 0;
+    uint32_t on = step == 2;
+    if (atomic_exchange(&g_uw_on, on) != on) fprintf(stderr, "[botw] settings: aspect ratio %s\n", on ? "wide" : "16:9 (the game's own)");
+    return 1;
+}
 #else
 float runtime_aspect_now(void) { return 0; }
 int runtime_aspect_toggle(void) { return 0; }
 void runtime_aspect_view(double w, double h) { (void)w; (void)h; }
 int runtime_aspect_step(void) { return -1; }
+int runtime_aspect_set(int step) { (void)step; return 0; }
 #endif
