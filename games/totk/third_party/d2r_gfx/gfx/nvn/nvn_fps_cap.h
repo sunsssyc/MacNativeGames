@@ -3,7 +3,8 @@
 // prototypes, so the frontend (runtime/frontend.m) can include this header.
 #pragma once
 /* 0 = off (the uncapped default: our own clock with a ceiling, the game's present interval honoured); otherwise clamped to
-   30..240. Any thread, at any time: it is one atomic value, the present path takes it over at the next frame and logs one line
+   30..240. Environment values must be whole decimal integers; malformed values disable the cap,
+   positive overflow clamps to 240. Any thread, at any time: it is one atomic value, the present path takes it over at the next frame and logs one line
    when its pacing changes. Overrides TOTK_FPS_CAP. */
 void nvn_set_fps_cap(int cap);
 /* The cap set (TOTK_FPS_CAP until nvn_set_fps_cap is called), 0 = off. */

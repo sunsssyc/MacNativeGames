@@ -2355,9 +2355,16 @@ static int game_holds_30(void) { return runtime_game_fps_limit() == 30; }
 static _Atomic int g_fps_cap = -1;     // -1: TOTK_FPS_CAP not read yet
 static int g_cap_ok, g_cap_link_hz;    // present_cfg: the uncapped mode's conditions hold (real-time frame step, 60 FPS patch); the display link's rate when it is the display's (mtl_link_hz), else 0
 static int fps_cap_clamp(int v) { return v <= 0 ? 0 : v < FPS_CAP_MIN ? FPS_CAP_MIN : v > FPS_CAP_MAX ? FPS_CAP_MAX : v; }
+/* Parse before narrowing: atoi overflows for a large setting and can turn a positive cap off. */
+static int fps_cap_env(const char *e) {
+    if (!e) return 0;
+    char *end; long value = strtol(e, &end, 10);
+    if (end == e || *end) return 0;
+    return value <= 0 ? 0 : value > FPS_CAP_MAX ? FPS_CAP_MAX : fps_cap_clamp((int)value);
+}
 int nvn_fps_cap(void) {
     int v = atomic_load(&g_fps_cap);
-    if (v < 0) { const char *e = getenv("TOTK_FPS_CAP"); int unread = -1; atomic_compare_exchange_strong(&g_fps_cap, &unread, fps_cap_clamp(e ? atoi(e) : 0)); v = atomic_load(&g_fps_cap); }
+    if (v < 0) { const char *e = getenv("TOTK_FPS_CAP"); int unread = -1; atomic_compare_exchange_strong(&g_fps_cap, &unread, fps_cap_env(e)); v = atomic_load(&g_fps_cap); }
     return v;
 }
 void nvn_set_fps_cap(int cap) { atomic_store(&g_fps_cap, fps_cap_clamp(cap)); }
