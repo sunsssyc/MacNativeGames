@@ -4,11 +4,13 @@
 #include "game_patches.h"
 #include "game_version.h"
 #include "world_survey.h"
+#include "drs_control.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
 #include <math.h>
+#include <errno.h>
 #include <TargetConditionals.h>
 #if !TARGET_OS_IPHONE
 #include <mach/mach.h>
@@ -46,7 +48,9 @@ void runtime_frame_step_pin(double ms){
     if(frame_step_data&&us)frame_step_store((float)(us/1e6));
     fprintf(stderr,"[totk] 1.4.3 frame step %s (pin %.3f ms)\n",us?"pinned":"real time",us/1000.0);
 }
+static void drs_update(uint64_t now_ns);
 void runtime_frame_step_update(uint64_t now_ns){
+    drs_update(now_ns);
     if(!frame_step_data||!now_ns)return;
     if(atomic_load_explicit(&pinned_step_us,memory_order_relaxed)){last_present_ns=now_ns;return;}
     if(!last_present_ns){last_present_ns=now_ns;return;}
@@ -474,27 +478,119 @@ static void patch_render_res(Module *m){
     fprintf(stderr,"[totk] 1.4.3 render resolution patch: scene render size %ux%u%s (4 instructions at main+0x585e48, value on the data page)\n",
             w,h,set?"":" (the game's handheld size; TOTK_RENDER_RES not set)");
 }
-/* TOTK_FIXED_RES=1: no dynamic resolution. The game's controller (main+0x584300, called from the renderer's per-frame update at
-   main+0x58196c) keeps a window of 24 frame-time samples, predicts the next frame's cost and steps through resolution tiers
-   (the scene came out at 3024x1888, 2712x1696, 2416x1512 on a 3024x1890 canvas: 100 %, 90 %, 80 %). It returns the tier's scale
-   as a float in the low word of x0 (bit 33 set: the tier did not change); the caller stores cc4 * scale / cc0 as the renderer's
-   scale at +0xccc. Every path leaves through one epilogue, so the single instruction that moves the scale into the result
-   (main+0x5848a8, mov w9, w23) is replaced by a move of 1.0f: the controller still runs and picks tiers, but every tier is 100 %.
-   The size the render-resolution patch above chooses (TOTK_RENDER_RES) stays; this only stops the dynamic part. */
-static void patch_fixed_res(Module *m){
-    const char *e=getenv("TOTK_FIXED_RES");
-    if(!e||!*e||!strcmp(e,"0"))return;
-#if TARGET_OS_IPHONE
-    fprintf(stderr,"[totk] TOTK_FIXED_RES: not available in the embedded build\n");(void)m;
-#else
-    const uint64_t site=0x5848a8;const uint32_t original=0x2a1703e9,replacement=0x52a7f009;   /* mov w9, w23 -> mov w9, #0x3f800000 */
-    uint32_t word;memcpy(&word,m->base+site,4);
-    if(word!=original){
-        fprintf(stderr,"[totk] fixed resolution patch main+%#llx: found %08x, expected %08x\n",(unsigned long long)site,word,original);
-        runtime_fail("fixed resolution patch: main does not match 1.4.3");
+/* The final scale returned by the game's controller is overridden, leaving its
+   internal state intact. One atomic word holds float scale + override bit 32;
+   the veneer uses only x9, the original instruction's destination register.
+   Disabled means native DRS, or 100% if TOTK_FIXED_RES was requested at boot. */
+static _Atomic(_Atomic uint64_t *) drs_data;
+static _Atomic int drs_on;
+static _Atomic float drs_minimum = DRS_MIN_DEFAULT, drs_target = 16.7f, drs_current = 1.0f;
+static _Atomic unsigned drs_revision;
+static int drs_fixed;
+void runtime_drs_set(int on) { atomic_store(&drs_on, !!on); atomic_fetch_add(&drs_revision, 1); }
+int runtime_drs_enabled(void) { return atomic_load(&drs_data) && atomic_load(&drs_on); }
+float runtime_drs_min(void) { return atomic_load(&drs_minimum); }
+float runtime_drs_scale(void) { return atomic_load(&drs_current); }
+void runtime_drs_set_min(float scale) { atomic_store(&drs_minimum, drs_clamp_min(scale)); atomic_fetch_add(&drs_revision, 1); }
+void runtime_drs_set_target_ms(float ms) {
+    if (!isfinite(ms) || ms < 4 || ms > 100) return;
+    atomic_store(&drs_target, ms); atomic_fetch_add(&drs_revision, 1);
+}
+static void drs_publish(float scale, int override) {
+    _Atomic uint64_t *data = atomic_load(&drs_data); if (!data) return;
+    uint32_t bits; memcpy(&bits, &scale, sizeof bits);
+    atomic_store(data, (uint64_t)bits | ((uint64_t)!!override << 32));
+    atomic_store(&drs_current, scale);
+}
+extern int nvn_gpu_frame_ms(uint32_t *frame, float *ms) __attribute__((weak_import));
+static void drs_update(uint64_t now_ns) {
+    static DrsCtl ctl;
+    static uint64_t prev;
+    static unsigned revision = ~0u;
+    static uint32_t gpu_seen;
+    static int have_gpu, was_on;
+    if (!atomic_load(&drs_data) || !now_ns) return;
+    double now = now_ns * 1e-9;
+    unsigned requested = atomic_load(&drs_revision);
+    if (revision != requested) {
+        int enabled = atomic_load(&drs_on);
+        if (!ctl.nlevel || enabled != was_on) drs_reset(&ctl, atomic_load(&drs_minimum), now);
+        else {
+            drs_levels(&ctl, atomic_load(&drs_minimum)); drs_settle(&ctl);
+            ctl.changed_at = now; ctl.up_since = ctl.probe_since = ctl.probe_at = -1;
+        }
+        was_on = enabled; revision = requested; prev = 0; have_gpu = 0;
+        drs_publish(enabled ? ctl.level[ctl.cur] : 1.0f, enabled || drs_fixed);
     }
-    memcpy(m->base+site,&replacement,4);
-    fprintf(stderr,"[totk] 1.4.3 fixed resolution (TOTK_FIXED_RES): the dynamic resolution controller's scale is held at 100 %% (1 instruction at main+%#llx)\n",(unsigned long long)site);
+    if (!atomic_load(&drs_on)) { prev = now_ns; return; }
+    if (prev && (now_ns <= prev || now_ns - prev > 250000000)) {
+        drs_pause(&ctl); drs_settle(&ctl); prev = now_ns; return;
+    }
+    float interval = prev ? (float)((now_ns - prev) * 1e-6) : -1;
+    prev = now_ns;
+    uint32_t frame = 0; float gpu = 0;
+    int fresh = nvn_gpu_frame_ms && nvn_gpu_frame_ms(&frame, &gpu) && (!have_gpu || frame != gpu_seen);
+    if (fresh) { have_gpu = 1; gpu_seen = frame; }
+    if (drs_step(&ctl, atomic_load(&drs_target), fresh, frame, gpu, interval, now)) {
+        drs_publish(ctl.level[ctl.cur], 1);
+        fprintf(stderr, "[totk] DRS %.0f%%, %s %.2f ms, target %.2f ms\n",
+                ctl.level[ctl.cur] * 100, ctl.fallback ? "interval" : "GPU", ctl.g, atomic_load(&drs_target));
+    }
+}
+#if !TARGET_OS_IPHONE
+static int drs_parse_number(const char *text, float *out) {
+    if (!text || !*text) return 0;
+    char *end; errno = 0;
+    float value = strtof(text, &end);
+    if (end == text || *end || errno == ERANGE || !isfinite(value)) return 0;
+    *out = value; return 1;
+}
+static void drs_configure(const char *minimum, const char *target, const char *cap) {
+    float value, ms = 16.7f;
+    runtime_drs_set_min(drs_parse_number(minimum, &value) ? value : DRS_MIN_DEFAULT);
+    if (drs_parse_number(target, &value) && value >= 4 && value <= 100) ms = value;
+    else if (drs_parse_number(cap, &value) && value > 0) {
+        /* Match the present scheduler's effective positive cap. */
+        if (value < 30) value = 30;
+        if (value > 240) value = 240;
+        ms = 1000.0f / value;
+    }
+    runtime_drs_set_target_ms(ms);
+}
+#endif
+static void patch_fixed_res(Module *m) {
+#if TARGET_OS_IPHONE
+    (void)m; /* Runtime code patching is unavailable in embedded builds. */
+#else
+    if (getenv("TOTK_EXPORT_IOS")) return;
+    const uint64_t site = 0x5848a8, data = (m->file_size + 0x3fff) & ~0x3fffULL;
+    /* Vert+ occupies +320..+927; rewriter code starts at +1024. */
+    const uint64_t stub = ((m->text_end + 15) & ~15ULL) + 928;
+    uint32_t code[] = {
+        adrp(9, (uintptr_t)m->base + stub, (uintptr_t)m->base + data),
+        0xf9401929, /* ldr x9, [x9, #48]: coherent scale and enable bit */
+        0xb6000069, /* tbz x9, #32, +12: native scale */
+        0x2a0903e9, /* mov w9, w9: discard override bit */
+        branch(stub + 16, site + 4),
+        0x2a1703e9, /* original mov w9, w23 */
+        branch(stub + 24, site + 4),
+    };
+    if (site + 4 > m->size || data + 56 > m->size || stub + sizeof code > ((m->text_end + 0x3fff) & ~0x3fffULL))
+        runtime_fail("1.4.3 DRS patch layout");
+    uint32_t word; memcpy(&word, m->base + site, 4);
+    if (word != 0x2a1703e9) runtime_fail("1.4.3 DRS original instruction mismatch");
+    for (unsigned i = 0; i < sizeof code; i++) if (m->base[stub + i]) runtime_fail("1.4.3 DRS veneer padding in use");
+    const char *fixed = getenv("TOTK_FIXED_RES"), *on = getenv("TOTK_DRS");
+    drs_fixed = fixed && *fixed && strcmp(fixed, "0");
+    atomic_store(&drs_on, on && *on && strcmp(on, "0"));
+    const char *minimum = getenv("TOTK_DRS_MIN"), *target = getenv("TOTK_DRS_TARGET_MS"), *cap = getenv("TOTK_FPS_CAP");
+    drs_configure(minimum, target, cap);
+    atomic_store(&drs_data, (_Atomic uint64_t *)(void *)(m->base + data + 48));
+    drs_publish(1, atomic_load(&drs_on) || drs_fixed);
+    memcpy(m->base + stub, code, sizeof code);
+    word = branch(site, stub); memcpy(m->base + site, &word, 4);
+    fprintf(stderr, "[totk] DRS %s, target %.2f ms, minimum %.0f%% (live switching available)\n",
+            atomic_load(&drs_on) ? "auto" : drs_fixed ? "fixed" : "native", atomic_load(&drs_target), atomic_load(&drs_minimum) * 100);
 #endif
 }
 int runtime_output_res_toggle(void){

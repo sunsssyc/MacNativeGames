@@ -2364,6 +2364,16 @@ static void sleep_until_ns(uint64_t dl);
 static uint64_t present_period(const win_t *o);
 static unsigned present_ticks(const win_t *o);
 extern void runtime_frame_step_update(uint64_t now_ns) __attribute__((weak_import));
+/* Publish completed GPU samples as one word: present reads it on the next frame.
+   Keep this independent of trace recording and never wait for GPU completion. */
+static _Atomic uint64_t g_gpu_frame_sample;
+int nvn_gpu_frame_ms(uint32_t *frame, float *ms) {
+    uint64_t sample = atomic_load(&g_gpu_frame_sample);
+    uint32_t bits = (uint32_t)sample;
+    *frame = (uint32_t)(sample >> 32); memcpy(ms, &bits, 4);
+    return *ms > 0;
+}
+
 extern void movie_host_tick(void) __attribute__((weak_import));   /* TOTK runtime/movie_host.c: pre-rendered cutscenes at their own frame rate */
 __attribute__((weak)) void dm_main_yield_stats(uint64_t *n, uint64_t *ns) { *n = 0; *ns = 0; }   // 宿主 hle_thread.c 提供真值；图形单测里为 0 | The host's hle_thread.c provides the ground truth; 0 in graphics unit tests
 __attribute__((weak)) uint32_t dm_guest_work_qos(unsigned *count) { if (count) *count = 0; return QOS_CLASS_UNSPECIFIED; }
@@ -2904,7 +2914,10 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         trow(f, "@sub_wall_ms", atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", atomic_exchange(&g_sub_cpu_ns, 0) / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
     } else atomic_store(&g_nvn_ns, 0);
     g_acq_wait_ns = g_pq_wait_ns = 0;
-    if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); g_hr[g_hn++ % HRN] = g; }   // GPU 时间滞后 8 帧取（已完成） | GPU time is taken 8 frames late (already completed)
+    if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) {
+        float ms = (float)g; uint32_t bits; memcpy(&bits, &ms, 4);
+        atomic_store(&g_gpu_frame_sample, ((uint64_t)(uint32_t)(f - 8) << 32) | bits);
+        tpush(3, g); trow(f - 8, "@gpu_ms", g); g_hr[g_hn++ % HRN] = g; }   // GPU 时间滞后 8 帧取（已完成） | GPU time is taken 8 frames late (already completed)
         { lf_rec *r = &g_lf[(f - 8) % LFN];   // 长帧日志（缺省开，DM_LONGFRAME=0 关）：整帧 > 20 ms 或 GPU > 16.7 ms、且明显高于近况，才打一行 | long-frame log (on by default, DM_LONGFRAME=0 turns it off): a line is printed only when the whole frame > 20 ms or GPU > 16.7 ms, and it is clearly above recent conditions
           static int on = -1; if (on < 0) { const char *e = getenv("DM_LONGFRAME"); on = !(e && !strcmp(e, "0")); }
           // 「长」是相对近况说的：稳定跑在 30 帧（菜单 / 无窗口宿主）或持续过载时每帧都 > 20 ms，那不是长帧，不刷屏——要比近 16 帧的滑动均值高出四成才算
