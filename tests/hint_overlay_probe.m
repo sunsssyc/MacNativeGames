@@ -103,6 +103,16 @@ int main(int argc,const char **argv){@autoreleasepool{
  atomic_store(&hintVoicePeak,-120);hintVoiceMeasure(tone);float toneDb=atomic_load(&hintVoiceLevel);
  assert(toneDb>-24&&toneDb<-22&&atomic_load(&hintVoicePeak)==toneDb);   // a 0.1 sine: -23 dBFS
  hintListening=NO;hintVoiceControls(NO);assert(hintVoiceMeter.hidden&&!((TOTKHintLevel *)hintVoiceMeter).timer&&NSMinX(hintDisclosure.frame)==20);
+ // Key 0 asks by voice from the game window or an empty question field; typed text, an input method composing and the
+ // game's own text entry keep it as a digit. (hintWorking: taken, but nothing starts in the probe.)
+ hintWorking=YES;
+ NSEvent *(^zero)(NSWindow *,NSEventModifierFlags)=^NSEvent *(NSWindow *in,NSEventModifierFlags flags){
+  return [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:flags timestamp:0 windowNumber:in.windowNumber context:nil characters:@"0" charactersIgnoringModifiers:@"0" isARepeat:NO keyCode:29];};
+ assert(hintVoiceKey(zero(w,0))&&!hintVoiceKey(zero(w,NSEventModifierFlagCommand)));
+ [hintPanel makeFirstResponder:hintQuestion];hintQuestion.stringValue=@"";
+ assert(hintVoiceKey(zero(hintPanel,0)));
+ [(NSTextView *)hintPanel.firstResponder setString:@"第"];assert(!hintVoiceKey(zero(hintPanel,0)));
+ hintQuestion.stringValue=@"";[hintPanel makeFirstResponder:nil];hintWorking=NO;
  // Cancelled voice recognition must never submit a stale transcript.
  NSDictionary *beforeVoice=hintJSON(hintPath(@"hint-request.json"));
  hintListening=YES;hintTranscript=@"不应发送";NSUInteger stale=hintVoiceGeneration;

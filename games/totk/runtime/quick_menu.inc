@@ -35,9 +35,10 @@ static NSFont *quickFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-
 /* The rows, in the order each tab shows them: tab 0 画面 (below the presets), 1 操作, 2 辅助 (below the hint assistant).
    kind 0 is a value with previous / next arrows, 1 an on / off switch, 2 a value whose choices drop down (the arrow keys
    still step through them). Actions 1xx and the number keys' codes are
-   settings_quick_step's; 22 and 26 press keys 6 and 7; 120 is the AI channel and 121 its model; 130 and 131 the
-   controller buttons that open the settings menu and the assistant (controller_map.h actions, runtime/gamepad.m). */
-enum { QUICK_CHANNEL=120, QUICK_MODEL=121, QUICK_PAD_SETTINGS=130, QUICK_PAD_ASSISTANT=131, QUICK_HINT=-1 };
+   settings_quick_step's; 22 and 26 press keys 6 and 7; 120 is the AI channel and 121 its model; 130, 131 and 132 the
+   controller buttons that open the settings menu and the assistant and ask it by voice (controller_map.h actions,
+   runtime/gamepad.m). */
+enum { QUICK_CHANNEL=120, QUICK_MODEL=121, QUICK_PAD_SETTINGS=130, QUICK_PAD_ASSISTANT=131, QUICK_PAD_VOICE=132, QUICK_HINT=-1 };
 typedef struct { int action,tab,kind; const char *zh,*en,*help_zh,*help_en; } QuickRowSpec;
 static const QuickRowSpec quickSpecs[]={
  {110,0,0,"帧率上限","Frame limit","限制最高帧率，兼顾流畅度与功耗。\n\n显示器刷新率可整除时，帧间隔会与显示节拍对齐。","Limit the frame rate to balance smoothness and power.\n\nWhen the display's refresh rate divides evenly, frames follow its beat."},
@@ -55,6 +56,7 @@ static const QuickRowSpec quickSpecs[]={
  {QUICK_PAD_SETTINGS,1,0,"打开设置","Settings menu","手柄上打开和收起这个菜单的键。键盘按 9 或 ⌘,。\n\n菜单里：方向键或左摇杆选择，A 确认，B 收起，L / R 换页。\n\n按 Home 键打开的是系统界面时，换用触控板或分享键。","The controller button that opens and closes this menu. On the keyboard: 9 or Command-,.\n\nIn the menu: D-pad or left stick to move, A to choose, B to close, L / R to change tabs.\n\nIf Home opens the system's own screen instead, pick the touchpad or Share."},
  {QUICK_PAD_ASSISTANT,1,0,"呼出露珠","Hint assistant","手柄上呼出卡关助手露珠的键，再按一次给下一级提示。键盘按 8。\n\n面板里：A 翻页或给提示，X 语音提问，B 收起，上下滚动。","The controller button that calls the hint assistant Riju; press again for the next hint. On the keyboard: 8.\n\nIn the panel: A for the next page or a hint, X to ask by voice, B to close, up / down to scroll."},
  {QUICK_MODEL,2,2,"模型","Model","这个渠道用哪个模型、怎么连：Claude Code 可以用这台 Mac 登录的账号，也可以走 Vertex AI；内置智能体可以用 Gemini 4 或 Claude。\n\n下一个问题就生效。","The model this channel runs and how it is reached: Claude Code with this Mac's own sign-in or through Vertex AI; the built-in agent with Gemini 4 or Claude.\n\nThe next question uses it."},
+ {QUICK_PAD_VOICE,1,0,"语音提问","Ask by voice","手柄上一按就开始语音提问的键：露珠的面板打开并开始听，再按一次结束，文字留在输入框里，回车发送。键盘按 0。\n\n默认不占用手柄键。面板开着时 X 也能开始和结束。","The controller button that asks by voice in one press: Riju's panel opens and listens, press again to stop; the words stay in the question field for Return to send. On the keyboard: 0.\n\nNo controller button by default. While the panel is open, X starts and stops too."},
 };
 enum { QUICK_ROWS=sizeof(quickSpecs)/sizeof(quickSpecs[0]) };
 
@@ -125,7 +127,7 @@ static BOOL quickGroupDown(NSString *group){
 }
 /* The controller buttons the 操作 rows offer for opening the settings menu or the assistant, in stepping order; -1 none. */
 static const int quickPadButtons[]={CONTROLLER_HOME,CONTROLLER_TOUCHPAD,CONTROLLER_SHARE,-1};
-static int quickPadAction(NSInteger tag){return tag==QUICK_PAD_SETTINGS?CONTROLLER_ACTION_SETTINGS:CONTROLLER_ACTION_ASSISTANT;}
+static int quickPadAction(NSInteger tag){return tag==QUICK_PAD_SETTINGS?CONTROLLER_ACTION_SETTINGS:tag==QUICK_PAD_VOICE?CONTROLLER_ACTION_VOICE:CONTROLLER_ACTION_ASSISTANT;}
 static NSString *quickPadName(int physical){
  if(physical==CONTROLLER_HOME)return @(TOTK_UI("Home 键","Home"));
  if(physical==CONTROLLER_TOUCHPAD)return @(TOTK_UI("触控板","Touchpad"));
@@ -354,7 +356,7 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  self.quickFocused=QUICK_HINT;((TOTKQuickRow *)self.quickHint).focused=YES;self.quickHint.needsDisplay=YES;
  for(TOTKQuickRow *b in self.quickRows){b.focused=NO;b.needsDisplay=YES;}
  self.quickHelpTitle.stringValue=@(TOTK_UI("卡关助手","Hint assistant"));
- self.quickHelpText.stringValue=@(TOTK_UI("卡住时问露珠：先给方向，再给要用什么，最后才是完整解法。\n\n也可以在游戏里随时按 8，或手柄上的呼出键（操作页里选）。","Ask Riju when you are stuck: where to go first, then what to use, the full solution last.\n\nKey 8 opens it any time in the game, as does the controller button chosen on the Controls tab."));
+ self.quickHelpText.stringValue=@(TOTK_UI("卡住时问露珠：先给方向，再给要用什么，最后才是完整解法。\n\n也可以在游戏里随时按 8，或手柄上的呼出键（操作页里选）；按 0 直接说出问题。","Ask Riju when you are stuck: where to go first, then what to use, the full solution last.\n\nKey 8 opens it any time in the game, as does the controller button chosen on the Controls tab; key 0 asks by voice at once."));
 }
 -(void)quickTabAction:(NSButton *)sender{
  self.quickTab=sender.tag;[self refreshQuickMenu];
@@ -402,7 +404,7 @@ static NSString *quick_saved_note(BOOL ok){
  [self focusQuickRow:sender];int direction=(int)((TOTKQuickRow *)sender).direction;if(!direction)direction=1;
  if(sender.tag==QUICK_CHANNEL||sender.tag==QUICK_MODEL){BOOL ok=quickChoiceStep(sender.tag,direction);
   self.quickNote.stringValue=ok?[NSString stringWithFormat:@(TOTK_UI("下一个问题起先用 %@","From the next question: %@ first")),quickChannelLabel(quickChannel())]:@(TOTK_UI("没能改写 assistant.json","Could not write assistant.json"));}
- else if(sender.tag==QUICK_PAD_SETTINGS||sender.tag==QUICK_PAD_ASSISTANT){int action=quickPadAction(sender.tag),saved=quickPadStep(action,direction);
+ else if(sender.tag==QUICK_PAD_SETTINGS||sender.tag==QUICK_PAD_ASSISTANT||sender.tag==QUICK_PAD_VOICE){int action=quickPadAction(sender.tag),saved=quickPadStep(action,direction);
   NSString *now=quickPadLabel(runtime_controller_action_buttons(action));
   self.quickNote.stringValue=saved?[NSString stringWithFormat:@(TOTK_UI("已保存：%@","Saved: %@")),now]:[NSString stringWithFormat:@(TOTK_UI("%@ · 仅本次会话","%@ · This session only")),now];}
  else if(sender.tag==22||sender.tag==26||!settings_quick_step){int count=direction<0&&sender.tag==22?GAMEPAD_TYPE_COUNT-1:1;for(int i=0;i<count;i++){runtime_input_key_synthetic((unsigned)sender.tag,1);runtime_input_key_synthetic((unsigned)sender.tag,0);}}
@@ -445,7 +447,7 @@ static NSString *quick_saved_note(BOOL ok){
  if(row.tag==26){if(runtime_mouse_enabled())*flags|=SETTINGS_ROW_ON;return runtime_mouse_enabled()?@(TOTK_UI("开启 · 收起后生效","On · collapse to play")):@(TOTK_UI("关闭","Off"));}
  if(row.tag==QUICK_CHANNEL)return quickGroupLabel(quickChannelGroup(quickChannel()));
  if(row.tag==QUICK_MODEL){if(quickChannelModels(quickChannelGroup(quickChannel())).count<2)*flags=0;return quickModelLabel(quickChannel());}   // no choice: greyed
- if(row.tag==QUICK_PAD_SETTINGS||row.tag==QUICK_PAD_ASSISTANT)return quickPadLabel(runtime_controller_action_buttons(quickPadAction(row.tag)));
+ if(row.tag==QUICK_PAD_SETTINGS||row.tag==QUICK_PAD_ASSISTANT||row.tag==QUICK_PAD_VOICE)return quickPadLabel(runtime_controller_action_buttons(quickPadAction(row.tag)));
  const char *value=settings_quick_value?settings_quick_value((int)row.tag,flags):NULL;
  if(!value){*flags=0;return @"--";}
  return @(value);

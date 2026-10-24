@@ -91,6 +91,9 @@ int main(void) {
     expect(press("home = minus\n", 1ULL << HOME, &line) == (1ULL << 11) && mode_of("home = minus\n", HOME, &line) == CONTROLLER_HOLD, "home as a Switch button");
     expect(mode_of("home = settings tap\n", HOME, &line) == -1 && line == 1, "settings takes no mode");
     expect(mode_of("share = assist\n", SHARE, &line) == -1 && line == 1, "unknown action");
+    expect(controller_mode_action((uint8_t)mode_of("share = voice\n", SHARE, &line)) == CONTROLLER_ACTION_VOICE && !line, "a button can ask by voice");
+    for (int i = 0; i < CONTROLLER_BUTTONS; i++) expect(controller_mode_action((uint8_t)mode_of("", i, &line)) != CONTROLLER_ACTION_VOICE, "no voice button by default");
+    expect(mode_of("share = voice toggle\n", SHARE, &line) == -1 && line == 1, "voice takes no mode");
     /* controller_map_set: the settings menu's 操作 rows rewrite one button's line and keep the rest. */
     char out[256];
     expect(controller_map_set("", HOME, "assistant", out, sizeof out) && !strcmp(out, "home = assistant\n"), "set into an empty file");

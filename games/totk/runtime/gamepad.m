@@ -536,10 +536,11 @@ static void refresh_gamepads(void) {
     uint64_t held = physical & ~suppressed & ~uiKept;
     for (int i = 0; i < CONTROLLER_BUTTONS; i++) if (controllerModes[i] != CONTROLLER_HOLD) held &= ~(1ULL << i);
     uint64_t mapped = controller_map_apply(controllerMap, held) | synthetic;
-    /* The buttons that open the settings menu or the assistant drive no Switch button (controller_map.h). */
+    /* The buttons that open the settings menu or the assistant, or ask it by voice, drive no Switch button (controller_map.h). */
     for (int i = 0; i < CONTROLLER_BUTTONS; i++) {
         int action = controller_mode_action(controllerModes[i]);
-        if (action && (edges >> i & 1) && padUi) padUi(action == CONTROLLER_ACTION_SETTINGS ? CONTROLLER_UI_SETTINGS : CONTROLLER_UI_ASSISTANT);
+        static const int events[CONTROLLER_ACTIONS] = {0, CONTROLLER_UI_SETTINGS, CONTROLLER_UI_ASSISTANT, CONTROLLER_UI_TALK};
+        if (action && (edges >> i & 1) && padUi) padUi(events[action]);
     }
     if (padUi && padUi(CONTROLLER_UI_HELD)) {
         pad_ui_navigate(mapped, &next);

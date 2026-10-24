@@ -413,13 +413,13 @@ static BOOL front_settings_key(NSEvent *e,BOOL down){
  if(down&&!e.isARepeat)front_settings_show(YES);
  return YES;
 }
-/* The controller (runtime/gamepad.m, controller_map.h CONTROLLER_UI_*): its settings and assistant buttons, and moving
-   through the hint panel or the settings menu while one is open; the hint panel, which opens above the menu, first. */
+/* The controller (runtime/gamepad.m, controller_map.h CONTROLLER_UI_*): its settings, assistant and voice buttons, and
+   moving through the hint panel or the settings menu while one is open; the hint panel, which opens above the menu, first. */
 static int front_pad_ui(int event){
  BOOL hint=totk_hint_pad(CONTROLLER_UI_HELD);
  if(event==CONTROLLER_UI_HELD)return hint||(quickMenuOpen&&hud_compact());
  if(event==CONTROLLER_UI_SETTINGS){if(!hud_compact())return 0;if(hint)totk_hint_pad(CONTROLLER_UI_BACK);front_settings_show(YES);return 1;}
- if(event==CONTROLLER_UI_ASSISTANT||hint)return totk_hint_pad(event);
+ if(event==CONTROLLER_UI_ASSISTANT||event==CONTROLLER_UI_TALK||hint)return totk_hint_pad(event);
  return quick_menu_pad(event);
 }
 static TOTKSettingsItem *settingsItem;

@@ -37,7 +37,7 @@ void runtime_mouse_move(double dx, double dy) { (void)dx; (void)dy; }
 void runtime_mouse_button(int button, int down) { (void)button; (void)down; }
 void runtime_mouse_release(void) {}
 /* runtime/gamepad.m's settings and assistant buttons (controller_map.h) without GameController: the default layout. */
-static uint64_t fakeActions[CONTROLLER_ACTIONS] = {0, 1ULL << CONTROLLER_HOME, 1ULL << CONTROLLER_TOUCHPAD | 1ULL << CONTROLLER_SHARE};
+static uint64_t fakeActions[CONTROLLER_ACTIONS] = {0, 1ULL << CONTROLLER_HOME, 1ULL << CONTROLLER_TOUCHPAD | 1ULL << CONTROLLER_SHARE, 0};
 void runtime_gamepad_set_ui(int (*ui)(int event)) { (void)ui; }
 uint64_t runtime_controller_action_buttons(int action) { return fakeActions[action]; }
 int runtime_controller_bind(int action, int physical) {
@@ -142,10 +142,11 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert([panel hitTest:[panel convertPoint:NSMakePoint(8,8) toView:host]]!=nil);
         /* Rows (quickSpecs): 0 cap 1 dynamic resolution 2 its lowest scale 3 render resolution 4 picture 5 edge smoothing
            6 anisotropic filtering 7 interpolation 8 aspect | 9 controller 10 mouse | 11 AI channel | 12 the controller's
-           settings button 13 its assistant button (操作, after mouse) | 14 the AI channel's model (辅助, below the channel). */
-        assert(panel.quickRows.count==15);
+           settings button 13 its assistant button (操作, after mouse) | 14 the AI channel's model (辅助, below the channel)
+           | 15 the controller's voice button (操作, last). */
+        assert(panel.quickRows.count==16);
         assert(panel.quickTabs.subviews.count==3 && panel.quickTab==0);
-        for (NSUInteger i=0;i<15;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i>=9));
+        for (NSUInteger i=0;i<16;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i>=9));
         assert(panel.quickHint.hiddenOrHasHiddenAncestor && !panel.quickStatus.hiddenOrHasHiddenAncestor);
         assert([panel.quickRows[3].title isEqualToString:@"渲染分辨率"] && [panel.quickRows[4].title isEqualToString:@"画面"]);
         assert([((TOTKQuickRow *)panel.quickRows[4]).value isEqualToString:@"原生 2K"]);
@@ -171,7 +172,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
         [panel.quickRows[5] performClick:nil];tick();assert(taa_enabled()==before);
         NSButton *controlsTab=(NSButton *)[panel.quickTabs viewWithTag:1];
         [controlsTab performClick:nil];tick();assert(panel.quickTab==1);
-        for (NSUInteger i=0;i<15;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=9&&i!=10&&i!=12&&i!=13));
+        for (NSUInteger i=0;i<16;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=9&&i!=10&&i!=12&&i!=13&&i!=15));
         assert(panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickStatus.hiddenOrHasHiddenAncestor);
         int padBefore=fakePadType;[panel.quickRows[9] performClick:nil];tick();assert(fakePadType==gamepad_type_next(padBefore));
         int mouseBefore=fakeMouse;[panel.quickRows[10] performClick:nil];tick();assert(fakeMouse!=mouseBefore);
@@ -187,9 +188,15 @@ int main(int argc, const char **argv) { @autoreleasepool {
         padSettings.direction=-1;[padSettings performClick:nil];[padSettings performClick:nil];padSettings.direction=1;tick();
         assert([padSettings.value isEqualToString:@"不用手柄键"] && [panel.quickHelpText.stringValue containsString:@"键盘按 9"]);
         [padSettings performClick:nil];tick();assert([padSettings.value isEqualToString:@"Home 键"]);
+        TOTKQuickRow *padVoice=(TOTKQuickRow *)panel.quickRows[15];
+        assert([padVoice.title isEqualToString:@"语音提问"] && [padVoice.value isEqualToString:@"不用手柄键"]);   /* none by default */
+        assert([padAssistant.value isEqualToString:@"分享键"]);   /* the settings button took the touchpad above */
+        padVoice.direction=-1;[padVoice performClick:nil];padVoice.direction=1;tick();   /* none, back: Share, taken from the assistant */
+        assert([padVoice.value isEqualToString:@"分享键"] && [padAssistant.value isEqualToString:@"不用手柄键"] && [panel.quickHelpText.stringValue containsString:@"键盘按 0"]);
+        [padVoice performClick:nil];tick();assert([padVoice.value isEqualToString:@"不用手柄键"]);
         NSButton *assistantTab=(NSButton *)[panel.quickTabs viewWithTag:2];
         [assistantTab performClick:nil];tick();assert(panel.quickTab==2);
-        for (NSUInteger i=0;i<15;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=11&&i!=14));
+        for (NSUInteger i=0;i<16;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=11&&i!=14));
         assert(!panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickFocused==QUICK_HINT);
         assert(quickMenuOpen);[panel.quickHint performClick:nil];assert(hintClicks==1);
         /* The AI channel: a group (自动, Claude Code, Codex, 内置智能体) and its model, both written as assistant.json
@@ -275,6 +282,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert(menu_key(125,0,YES) && panel.quickFocused==10);
         assert(menu_key(125,0,YES) && panel.quickFocused==12);
         assert(menu_key(125,0,YES) && panel.quickFocused==13);
+        assert(menu_key(125,0,YES) && panel.quickFocused==15);
         assert(menu_key(125,0,YES) && panel.quickFocused==9);
         assert(menu_key(48,0,YES) && panel.quickTab==2 && panel.quickFocused==QUICK_HINT);
         int clicks=hintClicks;assert(menu_key(36,0,YES) && hintClicks==clicks+1);
@@ -291,6 +299,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
         fakeHintOpen=YES;assert(front_pad_ui(CONTROLLER_UI_DOWN) && panel.quickFocused==0 && hintPadEvents[CONTROLLER_UI_DOWN]==1);fakeHintOpen=NO;
         assert(front_pad_ui(CONTROLLER_UI_ASSISTANT) && hintPadEvents[CONTROLLER_UI_ASSISTANT]==1 && quickMenuOpen);
         assert(!front_pad_ui(CONTROLLER_UI_VOICE) && quickMenuOpen);   /* nothing to talk to in the menu */
+        assert(front_pad_ui(CONTROLLER_UI_TALK) && hintPadEvents[CONTROLLER_UI_TALK]==1);   /* the voice button reaches the assistant from anywhere */
         assert(menu_key(53,0,YES));
         assert(!menu_key(125,0,YES));
         assert(!panel.hidden&&!fps_overlay_full_hud()&&fps_overlay_hints_enabled());

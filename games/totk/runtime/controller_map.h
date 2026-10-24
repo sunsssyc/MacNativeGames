@@ -7,8 +7,9 @@
    attacking), middle targets (ZL), the two side buttons drive nothing. The Home button (PS, Xbox, Home: physical 22)
    and the Share button (Xbox Share, Nintendo Capture: 23) are the controller's own, past the mouse.
    Besides a Switch button, a button can open the game's settings menu ("settings") or the hint assistant 露珠
-   ("assistant"; runtime/gamepad.m hands those presses to the window, runtime/frontend.m). By default Home opens the
-   settings menu, as on a Switch, and the touchpad and Share open the assistant; they never reach the game.
+   ("assistant"), or ask the assistant by voice at once ("voice"; runtime/gamepad.m hands those presses to the window,
+   runtime/frontend.m). By default Home opens the settings menu, as on a Switch, and the touchpad and Share open the
+   assistant; they never reach the game. No button asks by voice until the player gives it one.
    A layout file has one "physical = switch [mode]" line per change; '#' starts a comment; names are case-insensitive;
    "none" leaves a button unused; lines not given keep the default. The optional mode says how long the Switch button is
    held: "hold" (default) while the physical button is down, "tap" for 400 ms after each press (tap again to keep
@@ -38,16 +39,17 @@ enum { CONTROLLER_HOLD = 0, CONTROLLER_TAP = 1, CONTROLLER_TOGGLE = 2, CONTROLLE
 static inline int controller_mode_kind(uint8_t mode) { return mode & 7; }
 static inline int controller_mode_fire(uint8_t mode) { return mode >> 3; }
 /* What a button opens instead of driving a Switch button: 0 nothing. */
-enum { CONTROLLER_ACTION_SETTINGS = 1, CONTROLLER_ACTION_ASSISTANT = 2, CONTROLLER_ACTIONS = 3 };
-static const char *const controller_action_names[CONTROLLER_ACTIONS] = {"none", "settings", "assistant"};
+enum { CONTROLLER_ACTION_SETTINGS = 1, CONTROLLER_ACTION_ASSISTANT = 2, CONTROLLER_ACTION_VOICE = 3, CONTROLLER_ACTIONS = 4 };
+static const char *const controller_action_names[CONTROLLER_ACTIONS] = {"none", "settings", "assistant", "voice"};
 static inline int controller_mode_action(uint8_t mode) { return controller_mode_kind(mode) == CONTROLLER_ACTION ? mode >> 3 : 0; }
 static inline uint8_t controller_action_mode(int action) { return (uint8_t)(CONTROLLER_ACTION | action << 3); }
 /* The controller in the window's menus (runtime/gamepad.m to runtime/frontend.m and hint_overlay.m, main thread): asked
    CONTROLLER_UI_HELD, the window says whether the settings menu or the hint panel is open; while one is, the controller's
-   Switch buttons and left stick move through it instead of reaching the game, one event per press. */
+   Switch buttons and left stick move through it instead of reaching the game, one event per press. CONTROLLER_UI_VOICE
+   is X in the open panel; CONTROLLER_UI_TALK the voice button, anywhere. */
 enum { CONTROLLER_UI_HELD, CONTROLLER_UI_SETTINGS, CONTROLLER_UI_ASSISTANT, CONTROLLER_UI_UP, CONTROLLER_UI_DOWN,
        CONTROLLER_UI_LEFT, CONTROLLER_UI_RIGHT, CONTROLLER_UI_ACCEPT, CONTROLLER_UI_BACK, CONTROLLER_UI_NEXT_TAB,
-       CONTROLLER_UI_PREVIOUS_TAB, CONTROLLER_UI_VOICE };
+       CONTROLLER_UI_PREVIOUS_TAB, CONTROLLER_UI_VOICE, CONTROLLER_UI_TALK };
 
 static inline void controller_map_default(uint16_t map[CONTROLLER_BUTTONS], uint8_t modes[CONTROLLER_BUTTONS]) {
     for (int i = 0; i < CONTROLLER_BUTTONS; i++) { map[i] = i < CONTROLLER_SWITCH_BUTTONS ? (uint16_t)(1u << i) : 0; modes[i] = CONTROLLER_HOLD; }
@@ -95,7 +97,7 @@ static inline int controller_map_parse(const char *text, uint16_t map[CONTROLLER
             size_t n = (size_t)(value_end - value);
             int action = controller_name_index(controller_action_names, CONTROLLER_ACTIONS, value, n);   /* 0: none */
             int target = action == 0 ? CONTROLLER_SWITCH_BUTTONS : controller_name_index(controller_switch_names, CONTROLLER_SWITCH_BUTTONS, value, n);
-            if (target < 0 && action < 0) { *error = "unknown Switch button (a b x y l r zl zr plus minus lstick rstick up down left right none, or settings / assistant)"; return line; }
+            if (target < 0 && action < 0) { *error = "unknown Switch button (a b x y l r zl zr plus minus lstick rstick up down left right none, or settings / assistant / voice)"; return line; }
             uint8_t how = CONTROLLER_HOLD;
             if (mode) {
                 size_t m = (size_t)(mode_end - mode);
@@ -115,7 +117,7 @@ static inline int controller_map_parse(const char *text, uint16_t map[CONTROLLER
                 }
                 if (extra < stop) { *error = "too many words after the Switch button"; return line; }
                 if (target == CONTROLLER_SWITCH_BUTTONS && how != CONTROLLER_HOLD) { *error = "none takes no mode"; return line; }
-                if (action > 0) { *error = "settings and assistant take no mode"; return line; }
+                if (action > 0) { *error = "settings, assistant and voice take no mode"; return line; }
             }
             next[physical] = target < 0 || target == CONTROLLER_SWITCH_BUTTONS ? 0 : (uint16_t)(1u << target);
             nextMode[physical] = action > 0 ? controller_action_mode(action) : how;

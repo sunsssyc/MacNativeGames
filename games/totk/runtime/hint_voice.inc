@@ -232,7 +232,29 @@ static void hintRecordBegin(void){
  hintVoiceWrite(@{@"id":hintSetupID,@"install":@YES});
 }
 @end
+/* Key 0: ask by voice in one press. The panel opens (the game pauses) and listens at once; 0 again stops and leaves the
+   words in the question field, where Return sends them; Esc cancels. The controller's voice button and X in the panel do
+   the same (totk_hint_pad). While text is being typed (a question under way, an input method composing, the game's own
+   text entry) 0 is a digit like any other. */
+static void hintVoiceShortcut(void){
+ if(hintVoiceFinishing||hintWorking)return;   // the words are being written out, or the model is answering
+ if(hintListening){hintVoiceEnd(NO);return;}
+ if(![hintJSON(hintPath(@"assistant.json"))[@"enabled"] boolValue]){hintOpen();return;}   // the welcome first
+ if(!hintPanel.visible)hintOpen();
+ hintVoiceBegin();
+}
+/* The key itself, from the game window or the panel (a local monitor: the question field would take it otherwise). YES:
+   taken. */
+static BOOL hintVoiceKey(NSEvent *e){
+ if(!hintGame||e.keyCode!=29||(e.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift)))return NO;
+ if(e.window!=hintGame&&e.window!=hintPanel)return NO;
+ id editor=e.window.firstResponder;   // typing: the game's own text entry (naming a horse), or a question under way
+ if([editor isKindOfClass:NSTextView.class]&&(e.window!=hintPanel||[(NSTextView *)editor string].length||[(NSTextView *)editor hasMarkedText]))return NO;
+ if(!e.isARepeat)hintVoiceShortcut();
+ return YES;
+}
 static void hintVoiceInstall(void){
+ [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *e){return hintVoiceKey(e)?nil:e;}];
  hintVoiceSetup=[TOTKHintButton buttonWithTitle:@"" target:hintActions action:@selector(voiceSetup:)];
  ((TOTKHintButton *)hintVoiceSetup).quiet=YES;hintVoiceSetup.hidden=YES;[hintPanel.contentView addSubview:hintVoiceSetup];
  [hintScroll addGestureRecognizer:[[NSClickGestureRecognizer alloc] initWithTarget:hintActions action:@selector(pageNext:)]];

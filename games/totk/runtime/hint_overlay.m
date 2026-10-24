@@ -540,9 +540,9 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  hintDone=NO;hintWorking=YES;hintStarted=NSDate.date;if(reading)hintReadFollow(hintID);
  hintShow(@"让我想想……\n\nEsc 取消");return YES;
 }
-/* The controller (frontend.m front_pad_ui): its assistant button works as key 8. While the panel is open, A shows the
-   rest of an answer or presses the panel's main button (启用助手, 根据进度给提示), B closes it as Esc does, X starts and
-   ends a spoken question as 语音 does, up / down scroll the text. */
+/* The controller (frontend.m front_pad_ui): its assistant button works as key 8, its voice button as key 0
+   (hintVoiceShortcut). While the panel is open, A shows the rest of an answer or presses the panel's main button
+   (启用助手, 根据进度给提示), B closes it as Esc does, X starts and ends a spoken question as 语音 does, up / down scroll. */
 static BOOL hintPadKey(unsigned short code){
  NSEvent *e=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:hintGame.windowNumber context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:code];
  return totk_hint_key(e,YES);
@@ -551,13 +551,14 @@ int totk_hint_pad(int event){
  if(!hintGame)return 0;
  if(event==CONTROLLER_UI_HELD)return hintPanel.visible;
  if(event==CONTROLLER_UI_ASSISTANT)return hintPadKey(28);
+ if(event==CONTROLLER_UI_TALK){hintVoiceShortcut();return 1;}
  if(!hintPanel.visible)return 0;
  if(event==CONTROLLER_UI_BACK)return hintPadKey(53);
  if(event==CONTROLLER_UI_ACCEPT){
   if(hintPagesRemain())hintPageNext();
   else if(!hintEnable.hidden&&hintEnable.enabled)[hintEnable performClick:nil];
  }
- if(event==CONTROLLER_UI_VOICE&&!hintMic.hidden&&hintMic.enabled)[hintActions voice:nil];
+ if(event==CONTROLLER_UI_VOICE&&!hintMic.hidden&&hintMic.enabled)hintVoiceShortcut();
  if(event==CONTROLLER_UI_UP||event==CONTROLLER_UI_DOWN){
   NSClipView *clip=hintScroll.contentView;NSPoint at=clip.bounds.origin;CGFloat step=72*(event==CONTROLLER_UI_DOWN?1:-1)*(hintScroll.documentView.isFlipped?1:-1);
   at.y=MAX(0,MIN(NSHeight(hintScroll.documentView.frame)-NSHeight(clip.bounds),at.y+step));
