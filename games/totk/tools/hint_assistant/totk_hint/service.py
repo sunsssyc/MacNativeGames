@@ -17,6 +17,7 @@ A session is one stuck moment: its later tiers see the earlier answers and go on
 import fcntl
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -35,6 +36,7 @@ RESPONSE = 'hint-response.json'
 MAX_HISTORY_TURNS = 12
 MAX_SESSIONS = 8
 MAX_QUESTION_CHARS = 2000
+CHINESE = re.compile('[\u4e00-\u9fff]')   # the answer is Chinese: text without any is not shown while streaming
 STAGES = {'game_state': '正在看存档', 'quest_log': '正在看任务日志', 'search_text': '正在查游戏文本',
           'screenshot': '正在看画面', 'runtime_state': '正在看林克的位置', 'wait_state': '正在看林克的位置',
           'press_button': '正在操作游戏', 'stop_action': '正在松开按键', 'mark_screen': '正在圈画面',
@@ -191,6 +193,8 @@ class Service:
                 shown.update(stage=STAGES.get(value, '正在查资料'), partial='')
                 show(True)
             elif kind == 'text' and clean(value) != shown['partial']:
+                if not CHINESE.search(value):
+                    return   # words before a tool call, often English ("Need to know..."): not the answer
                 shown.update(stage='正在回答', partial=clean(value))
                 show()
             if reading:

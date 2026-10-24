@@ -80,7 +80,19 @@ static void hintMarkStroke(NSBezierPath *path){   // dark under orange, readable
  }
 }
 @end
-static void hintMarksHide(void){hintMarks=nil;if(hintMarksWindow.visible)[hintMarksWindow orderOut:nil];}
+static void hintMarksHide(void){
+ hintMarks=nil;if(hintMarksWindow.visible)[hintMarksWindow orderOut:nil];
+ if(hintPanelLeft){hintPanelLeft=NO;if(hintExpanded)hintLayout(0);}
+}
+static int hintMarksUnder(NSArray<NSDictionary *> *marks,NSRect panel,NSRect game){   // marks the panel would hide
+ int n=0;
+ for(NSDictionary *mark in marks)for(NSString *key in @[@"at",@"to"]){
+  NSArray *at=mark[key];if(![at isKindOfClass:NSArray.class]||at.count!=2)continue;
+  NSPoint p=hintMarkPoint(at,game);
+  if(NSPointInRect(p,NSInsetRect(panel,-70,-50)))n++;   // a circle and its label reach past the point
+ }
+ return n;
+}
 static void hintMarksShow(NSArray *marks){   // over the paused game window, under the panel
  NSMutableArray<NSDictionary *> *kept=[NSMutableArray new];
  for(NSDictionary *mark in [marks isKindOfClass:NSArray.class]?marks:@[]){
@@ -94,7 +106,13 @@ static void hintMarksShow(NSArray *marks){   // over the paused game window, und
   hintMarksWindow.backgroundColor=NSColor.clearColor;hintMarksWindow.opaque=NO;hintMarksWindow.hasShadow=NO;hintMarksWindow.ignoresMouseEvents=YES;
   hintMarksWindow.contentView=[TOTKHintMarks new];
  }
- [hintMarksWindow setFrame:[hintGame convertRectToScreen:hintGame.contentView.bounds] display:YES];
+ NSRect game=[hintGame convertRectToScreen:hintGame.contentView.bounds];
+ [hintMarksWindow setFrame:game display:YES];
+ if(hintPanel.visible){   // the panel moves to the side where it hides fewer marks
+  NSRect right=hintPanel.frame,left=right;right.origin.x=NSMaxX(game)-NSWidth(right)-24;left.origin.x=NSMinX(game)+24;
+  BOOL toLeft=hintMarksUnder(kept,right,game)>hintMarksUnder(kept,left,game);
+  if(toLeft!=hintPanelLeft){hintPanelLeft=toLeft;hintLayout(0);}
+ }
  hintMarksWindow.contentView.needsDisplay=YES;
  [hintGame addChildWindow:hintMarksWindow ordered:NSWindowAbove];[hintMarksWindow orderFront:nil];
  if(hintPanel.visible)[hintPanel orderFront:nil];

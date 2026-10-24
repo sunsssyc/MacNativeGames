@@ -47,10 +47,11 @@ static NSString *hintPagedAnswer;
 // hint_scene.inc: the frame the panel opened on, and 指给我看's marks on it
 static void hintPause(void);
 static void hintResume(void);
+static BOOL hintTestMode(void);   // hint_test.inc: a test session drives the panel through the command channel
 static void hintMarksShow(NSArray *marks);
 static void hintMarksHide(void);
 static NSButton *hintPointButton;
-static BOOL hintSceneReady, hintPointNext;
+static BOOL hintSceneReady, hintPointNext, hintPanelLeft;
 /* While the model works: what it is doing (the service's "stage") and the answer written so far ("partial"), typed out at
    a reading pace by hintReveal: the model hands its words over in one burst seconds before the run ends. */
 static NSString *hintStage, *hintPartial;
@@ -216,7 +217,8 @@ static void hintLayout(CGFloat height){
  if(hintWelcome)h=330;
  NSRect f=[hintGame convertRectToScreen:hintGame.contentView.bounds];
  CGFloat bottom=MIN(MAX(40,NSHeight(f)*0.18),MAX(20,NSHeight(f)-h-20));
- [hintPanel setFrame:NSMakeRect(NSMaxX(f)-w-24,NSMinY(f)+bottom,w,h) display:NO];
+ // The panel sits on the right, or on the left while 指给我看 marks would be under it (hint_scene.inc).
+ [hintPanel setFrame:NSMakeRect(hintPanelLeft?NSMinX(f)+24:NSMaxX(f)-w-24,NSMinY(f)+bottom,w,h) display:NO];
  hintTitle.frame=NSMakeRect(64,h-47,w-148,26);hintTitle.font=hintFont(18);hintTitle.alignment=NSTextAlignmentLeft;
  hintPortrait.frame=NSMakeRect(20,h-56,36,46);
  hintBack.title=hintWorking?@"取消":@"收起";hintBack.toolTip=@"收起对话 · Esc";
@@ -282,7 +284,7 @@ static void hintShowWelcome(void){
  hintTitle.hidden=hintDisclosure.hidden=hintEnable.hidden=hintBack.hidden=NO;hintProgress.hidden=YES;[hintProgress stopAnimation:nil];
  hintTitle.stringValue=@"露珠";
  hintText.stringValue=@"遇到难题时，先给一点线索。\n需要时，再逐步查看更具体的提示。";
- hintDisclosure.stringValue=@"求助时，模型按需读取的存档与游戏文本会交给 Claude Code、Codex 或 Vertex AI。不会修改存档；截图和代操作默认关闭。";
+ hintDisclosure.stringValue=@"求助时，模型按需查看暂停的画面、读取存档与游戏文本，交给 Claude Code、Codex 或 Vertex AI。不会修改存档；代操作默认关闭。";
  hintEnable.title=@"启用助手";hintEnable.action=@selector(enable:);hintEnable.enabled=YES;hintBack.title=@"收起  Esc";
  hintLayout(440);
 }
@@ -447,7 +449,7 @@ void totk_hint_install(NSWindow *window) {
  [hintPanel.contentView addSubview:hintScroll];hintText.textColor=hintInk();
  hintActions=[TOTKHintActions new];
  hintTitle=[NSTextField labelWithString:@"卡关助手"];hintTitle.font=hintFont(24);hintTitle.textColor=hintInk();hintTitle.alignment=NSTextAlignmentCenter;
- hintDisclosure=[NSTextField wrappingLabelWithString:@"求助时，模型按需读取的存档与游戏文本会交给 Claude Code、Codex 或 Vertex AI。\n不会修改存档；截图和代操作默认关闭。启用后按 8 求助。"];
+ hintDisclosure=[NSTextField wrappingLabelWithString:@"求助时，模型按需查看暂停的画面、读取存档与游戏文本，交给 Claude Code、Codex 或 Vertex AI。\n不会修改存档；代操作默认关闭。启用后按 8 求助。"];
  hintDisclosure.font=hintFont(12);hintDisclosure.textColor=[hintInk() colorWithAlphaComponent:0.78];
  hintEnable=[TOTKHintButton buttonWithTitle:@"启用助手" target:hintActions action:@selector(enable:)];((TOTKHintButton *)hintEnable).primary=YES;
  hintBack=[TOTKHintButton buttonWithTitle:@"返回  Esc" target:hintActions action:@selector(close:)];
@@ -524,3 +526,4 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  hintDone=NO;hintWorking=YES;hintStarted=NSDate.date;if(reading)hintReadFollow(hintID);
  hintShow(@"让我想想……\n\nEsc 取消");return YES;
 }
+#include "hint_test.inc"

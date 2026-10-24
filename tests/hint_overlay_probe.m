@@ -234,6 +234,11 @@ int main(int argc,const char **argv){@autoreleasepool{
  [[NSJSONSerialization dataWithJSONObject:@{@"id":hintID,@"session":hintSession,@"status":@"done",@"text":@"圈出的图案在旗帜右边。",@"marks":marks} options:0 error:nil]
   writeToFile:hintPath(@"hint-response.json") atomically:YES];
  hintPoll();assert(hintMarksWindow.visible&&hintMarks.count==2);
+ // Marks the panel would hide move it to the other side; it comes back when they go.
+ CGFloat rightX=NSMinX(hintPanel.frame);
+ hintMarksShow(@[@{@"kind":@"circle",@"at":@[@0.85,@0.5],@"label":@"右边的东西"}]);
+ assert(hintPanelLeft&&NSMinX(hintPanel.frame)<rightX);
+ hintMarksShow(marks);
  if(getenv("HINT_PROBE_MARKS")){   // a look at the drawing: the marks over a picture
   NSView *view=hintMarksWindow.contentView;NSBitmapImageRep *shot=[view bitmapImageRepForCachingDisplayInRect:view.bounds];
   [NSGraphicsContext saveGraphicsState];[NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:shot]];
@@ -241,7 +246,7 @@ int main(int argc,const char **argv){@autoreleasepool{
   [view drawRect:view.bounds];[NSGraphicsContext restoreGraphicsState];
   [[shot representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(getenv("HINT_PROBE_MARKS")) atomically:YES];
  }
- [hintActions close:nil];assert(!hintMarksWindow.visible&&!hintSceneReady&&!assistantPaused);
+ [hintActions close:nil];assert(!hintMarksWindow.visible&&!hintSceneReady&&!assistantPaused&&!hintPanelLeft);
  shotFails=YES;[[NSFileManager defaultManager] removeItemAtPath:hintPath(@"hint-scene.png") error:nil];
  hintOpen();assert(!assistantPaused);   // waiting for the frame
  [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.8]];

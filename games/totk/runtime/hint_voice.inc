@@ -116,13 +116,14 @@ static void hintReadTick(void){   // start the next line once it can be read (hi
  if(hintReadLine/3>(NSInteger)hintPage){hintPage=hintReadLine/3;hintShowPage();}   // the page follows the voice
  if(file){
   hintPlayer=[[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:file] error:nil];
-  hintPlayer.delegate=(id)hintActions;
+  hintPlayer.delegate=(id)hintActions;if(hintTestMode())hintPlayer.volume=0;   // a test session reads silently
   if([hintPlayer play])hintReadPlaying=hintReadLine;else{hintReadSystem=YES;hintPlayer=nil;}
   if(hintReadPlaying>=0)return;
  }
  if(!hintSpeaker){hintSpeaker=[AVSpeechSynthesizer new];hintSpeaker.delegate=(id)hintActions;}
  AVSpeechUtterance *utterance=[AVSpeechUtterance speechUtteranceWithString:lines[hintReadLine]];
- utterance.voice=hintSystemVoice();hintReadPlaying=hintReadLine;[hintSpeaker speakUtterance:utterance];
+ utterance.voice=hintSystemVoice();if(hintTestMode())utterance.volume=0;
+ hintReadPlaying=hintReadLine;[hintSpeaker speakUtterance:utterance];
 }
 static void hintReadBegin(NSString *jobID,BOOL sendLines){
  hintReadStop();

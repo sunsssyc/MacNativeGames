@@ -162,6 +162,8 @@ static void *input_file(void *arg) {
     for (;;) {
         if (!fgets(line, sizeof line, f)) { if (ferror(f)) runtime_fail("diagnostic input read"); clearerr(f); usleep(100000); continue; }
         if (runtime_survey_command(line)) continue;
+        extern int totk_hint_command(const char *line) __attribute__((weak_import));   /* hint_overlay.m, test sessions */
+        if (totk_hint_command && totk_hint_command(line)) continue;
         unsigned code, ms; int used = 0;
         if (sscanf(line, "down %u %n", &code, &used) == 1 && used && !line[used] && code < 128) {
             fprintf(stderr,"[totk-input] file: key %u down\n",code);runtime_input_key_synthetic(code,1);

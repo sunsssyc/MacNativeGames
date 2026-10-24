@@ -14,7 +14,9 @@ DEFAULTS = {
     'backends': list(BACKENDS),   # "auto" tries these in order until one answers
     'tier_default': 1,            # the first press of key 8: 1 where to go, 2 what to use, 3 full solution
     'observe_current_scene': False,  # explicit opt-in; one game window image per question
-    'allow_screenshot': False,    # may the model look at the game window (the player opts in here)
+    # may the model look at the game window: the frame comes from the game itself (no macOS screen recording), and
+    # behind the open panel it is the paused frame the panel opened on (user, 2026-10-24: no permission gate needed)
+    'allow_screenshot': True,
     # May the model press game buttons. Even when true, only for a question the player sends with 「允许操作」 in the
     # panel; the game takes at most a few presses per request and Esc stops them (runtime/hint_runtime_tools.inc).
     'allow_actions': False,
