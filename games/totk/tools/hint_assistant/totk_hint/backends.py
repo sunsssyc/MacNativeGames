@@ -385,20 +385,24 @@ class Codex:
         return {'text': text, 'model': self.settings.get('model') or 'default'}
 
 
-LABELS = {'claude-code': 'Claude Code', 'codex': 'Codex', 'vertex-claude-code': 'Claude Code（Vertex）', 'vertex': 'Claude（Vertex）'}
+LABELS = {'claude-code': 'Claude Code（本机）', 'codex': 'Codex（本机）', 'vertex-claude-code': 'Claude Code（Vertex AI）',
+          'vertex': 'Claude（Vertex AI）'}
 
 
 def label(name, config):
-    """The channel's name as the game's settings menu shows it."""
+    """The channel's name as the game's settings menu shows it: the model, and in brackets how it is reached."""
     if name != 'agent':
         return LABELS.get(name, name)
     agent = config.get('agent') or {}
     provider, model = agent.get('provider'), agent.get('model') or ''
     if provider == 'gemini':
-        return 'Gemini 4' if not model or model.startswith('gemini-4') else model
+        return f"{'Gemini 4' if not model or model.startswith('gemini-4') else model}（Vertex AI）"
     if provider == 'vertex':
-        return 'Claude 智能体（Vertex）'
-    return model or ('Claude API' if provider == 'anthropic' else '内置智能体')
+        return f"{model or 'Claude'} 智能体（Vertex AI）"
+    if provider == 'anthropic':
+        return f"{model or 'Claude'}（Anthropic API）"
+    from .agent import _local
+    return f"{model or '内置智能体'}{'（本机）' if _local(agent.get('base_url') or '') else ''}"
 
 
 def make(name, config):

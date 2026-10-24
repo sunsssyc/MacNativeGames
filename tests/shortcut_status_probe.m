@@ -174,15 +174,27 @@ int main(int argc, const char **argv) { @autoreleasepool {
         NSString *assistant=quickAssistantPath(@"assistant.json");
         assert([@"{\"enabled\": true, \"agent\": {\"provider\": \"gemini\", \"model\": \"gemini-4-argon\"}}" writeToFile:assistant atomically:YES encoding:NSUTF8StringEncoding error:nil]);
         tick();TOTKQuickRow *channel=(TOTKQuickRow *)panel.quickRows[11];
-        assert([channel.value isEqualToString:@"自动"] && channel.enabled);
+        assert([channel.value isEqualToString:@"自动（按顺序）"] && channel.enabled && channel.dropdown);
         [channel performClick:nil];tick();
-        assert([quickChannel() isEqualToString:@"claude-code"] && [channel.value isEqualToString:@"Claude Code"]);
+        assert([quickChannel() isEqualToString:@"claude-code"] && [channel.value isEqualToString:@"Claude Code（本机）"]);
         assert([quickJSONFile(assistant)[@"enabled"] boolValue] && [quickJSONFile(assistant)[@"agent"][@"model"] isEqualToString:@"gemini-4-argon"]);
-        [channel performClick:nil];tick();assert([channel.value isEqualToString:@"Gemini 4"]);
+        [channel performClick:nil];tick();assert([channel.value isEqualToString:@"Gemini 4（Vertex AI）"]);
         assert(panel.quickFocused==11 && [panel.quickChannelList.stringValue containsString:@"打开一次卡关助手后"] && !panel.quickChannelList.hiddenOrHasHiddenAncestor);
-        assert([@"{\"backends\": {\"agent\": {\"ok\": true, \"label\": \"Gemini 4\"}, \"codex\": {\"ok\": false, \"why\": \"没有安装\"}}}" writeToFile:quickAssistantPath(@"hint-backends.json") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+        assert([@"{\"backends\": {\"agent\": {\"ok\": true, \"label\": \"Gemini 4（Vertex AI）\"}, \"codex\": {\"ok\": false, \"why\": \"没有安装\"}}}" writeToFile:quickAssistantPath(@"hint-backends.json") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
         tick();
-        assert([panel.quickChannelList.stringValue containsString:@"Gemini 4　可用 · 当前"] && [panel.quickChannelList.stringValue containsString:@"Codex　不可用：没有安装"]);
+        assert([panel.quickChannelList.stringValue containsString:@"Gemini 4（Vertex AI）　可用 · 当前"] && [panel.quickChannelList.stringValue containsString:@"Codex（本机）　不可用：没有安装"]);
+        /* The dropdown: every channel at once, the current one selected, unusable ones marked; one click chooses. */
+        [panel quickOpenChoices:channel];TOTKQuickChoices *choices=(TOTKQuickChoices *)panel.quickChoices;
+        assert(choices && choices.options.count==6 && choices.options[2].state==NSControlStateValueOn && choices.highlighted==2);
+        assert([choices.options[3].title isEqualToString:@"Codex（本机）  · 不可用"] && NSContainsRect(panel.bounds,choices.list));
+        [choices.options[4] performClick:nil];tick();
+        assert(!panel.quickChoices && [quickChannel() isEqualToString:@"vertex-claude-code"] && panel.quickFocused==11);
+        assert(menu_key(36,0,YES) && panel.quickChoices);   /* Return on the row opens it; Up / Down / Return choose */
+        assert(menu_key(126,0,YES) && ((TOTKQuickChoices *)panel.quickChoices).highlighted==3);
+        assert(menu_key(36,0,YES) && !panel.quickChoices && [quickChannel() isEqualToString:@"codex"]);
+        assert(menu_key(49,0,YES) && panel.quickChoices && menu_key(53,0,YES) && !panel.quickChoices && quickMenuOpen);   /* Esc closes only the list */
+        [panel quickOpenChoices:channel];[(TOTKQuickChoices *)panel.quickChoices mouseDown:[NSEvent new]];assert(!panel.quickChoices);   /* a click beside it */
+        assert(quickChannelSet(@"agent"));tick();
         channel.direction=-1;[channel performClick:nil];channel.direction=1;[channel performClick:nil];   /* back, then forward again */
         channel.direction=-1;[channel performClick:nil];[channel performClick:nil];channel.direction=1;tick();
         assert([quickChannel() isEqualToString:@"auto"]);

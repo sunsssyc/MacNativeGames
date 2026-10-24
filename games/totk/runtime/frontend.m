@@ -183,7 +183,7 @@ extern void fps_overlay_set_collapsed(int collapsed);
 @property(strong) NSButton *quickHint, *quickReturn;
 @property(strong) NSView *quickTabs;
 @property(strong) NSTextField *quickHelpTitle, *quickHelpText, *quickPresetLabel, *quickStatus, *quickChannelList;
-@property(strong) NSView *quickBackdrop;
+@property(strong) NSView *quickBackdrop, *quickChoices;
 @property(strong) NSView *quickDivider;
 @property(strong) NSVisualEffectView *quickBlur;
 @property NSInteger quickTab, quickFocused;

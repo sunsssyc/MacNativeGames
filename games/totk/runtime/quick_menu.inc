@@ -11,6 +11,7 @@ extern int settings_quick_saving(void) __attribute__((weak_import));
 extern void runtime_settings_pause(int paused) __attribute__((weak_import));
 static NSString *pad_type_text(void);
 void runtime_input_key_synthetic(unsigned code,int down);
+@class TOTKQuickRow;
 @interface TOTKShortcutHelp (QuickMenu)
 -(void)buildQuickMenu;
 -(void)refreshQuickMenu;
@@ -20,6 +21,9 @@ void runtime_input_key_synthetic(unsigned code,int down);
 -(void)focusQuickRow:(NSButton *)sender;
 -(void)focusQuickHint;
 -(NSArray<NSNumber *> *)quickOrder;
+-(void)quickOpenChoices:(TOTKQuickRow *)row;
+-(void)quickCloseChoices;
+-(void)quickChoose:(NSButton *)sender;
 @end
 static NSColor *quickAccent(void){return [NSColor colorWithCalibratedRed:0.88 green:0.40 blue:0.015 alpha:1];}
 static NSColor *quickGold(void){return [NSColor colorWithCalibratedRed:1 green:0.9 blue:0.50 alpha:1];}
@@ -27,7 +31,8 @@ static NSColor *quickInk(void){return [NSColor colorWithCalibratedRed:0.99 green
 static NSFont *quickFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-Regular" size:size]?:[NSFont systemFontOfSize:size];}
 
 /* The rows, in the order each tab shows them: tab 0 画面 (below the presets), 1 操作, 2 辅助 (below the hint assistant).
-   kind 0 is a value with previous / next arrows, 1 an on / off switch. Actions 1xx and the number keys' codes are
+   kind 0 is a value with previous / next arrows, 1 an on / off switch, 2 a value whose choices drop down (the arrow keys
+   still step through them). Actions 1xx and the number keys' codes are
    settings_quick_step's; 22 and 26 press keys 6 and 7; 120 is the AI channel. */
 enum { QUICK_CHANNEL=120, QUICK_HINT=-1 };
 typedef struct { int action,tab,kind; const char *zh,*en,*help_zh,*help_en; } QuickRowSpec;
@@ -43,7 +48,7 @@ static const QuickRowSpec quickSpecs[]={
  {21,0,0,"画面比例","Aspect ratio","标准 16:9、适配窗口或宽屏（4 键）。","Standard 16:9, fit to the window, or widescreen (key 4)."},
  {22,1,0,"手柄类型","Controller","选择手柄按键布局，或自动识别连接的手柄。","Choose a controller layout or detect the connected controller automatically."},
  {26,1,1,"鼠标视角","Mouse camera","用鼠标控制视角。收起设置后生效；⌘Tab 可释放指针。","Control the camera with the mouse after closing settings. Command-Tab releases the pointer."},
- {QUICK_CHANNEL,2,0,"AI 渠道","AI channel","卡关助手先问哪个模型。它不可用或出错时，按顺序换下一个。\n\n下一个问题就用新的渠道，不用重启游戏。","Which model the hint assistant asks first. When it is unavailable or fails, the next one in order answers.\n\nThe next question uses the new channel; no restart needed."},
+ {QUICK_CHANNEL,2,2,"AI 渠道","AI channel","卡关助手先问哪个模型。它不可用或出错时，按顺序换下一个。\n\n下一个问题就用新的渠道，不用重启游戏。","Which model the hint assistant asks first. When it is unavailable or fails, the next one in order answers.\n\nThe next question uses the new channel; no restart needed."},
 };
 enum { QUICK_ROWS=sizeof(quickSpecs)/sizeof(quickSpecs[0]) };
 
@@ -67,30 +72,36 @@ static NSDictionary *quickChannelState(NSString *name){
  id all=quickJSONFile(quickAssistantPath(@"hint-backends.json"))[@"backends"];id one=[all isKindOfClass:NSDictionary.class]?all[name]:nil;
  return [one isKindOfClass:NSDictionary.class]?one:nil;
 }
+/* A channel as the menu names it: the model, and in brackets the way it is reached (this Mac's own sign-in, Vertex AI). The
+   hint service writes the same names (backends.label); these are for before it first ran. */
 static NSString *quickChannelLabel(NSString *name){
- if([name isEqual:@"auto"])return @(TOTK_UI("自动","Automatic"));
+ if([name isEqual:@"auto"])return @(TOTK_UI("自动（按顺序）","Automatic (in order)"));
  id label=quickChannelState(name)[@"label"];if([label isKindOfClass:NSString.class]&&[label length])return label;
- if([name isEqual:@"claude-code"])return @"Claude Code";
- if([name isEqual:@"codex"])return @"Codex";
- if([name isEqual:@"vertex-claude-code"])return @"Claude Code（Vertex）";
- if([name isEqual:@"vertex"])return @"Claude（Vertex）";
+ if([name isEqual:@"claude-code"])return @(TOTK_UI("Claude Code（本机）","Claude Code (this Mac)"));
+ if([name isEqual:@"codex"])return @(TOTK_UI("Codex（本机）","Codex (this Mac)"));
+ if([name isEqual:@"vertex-claude-code"])return @"Claude Code（Vertex AI）";
+ if([name isEqual:@"vertex"])return @"Claude（Vertex AI）";
  id agent=quickJSONFile(quickAssistantPath(@"assistant.json"))[@"agent"];
  NSString *provider=[agent isKindOfClass:NSDictionary.class]&&[agent[@"provider"] isKindOfClass:NSString.class]?agent[@"provider"]:@"";
  NSString *model=[agent isKindOfClass:NSDictionary.class]&&[agent[@"model"] isKindOfClass:NSString.class]?agent[@"model"]:@"";
- if([provider isEqual:@"gemini"])return [model hasPrefix:@"gemini-4"]||!model.length?@"Gemini 4":model;
+ if([provider isEqual:@"gemini"])return [NSString stringWithFormat:@"%@（Vertex AI）",[model hasPrefix:@"gemini-4"]||!model.length?@"Gemini 4":model];
  return model.length?model:@(TOTK_UI("内置智能体","Built-in agent"));
 }
-/* The next channel in either direction, written into assistant.json with everything else it holds. */
-static BOOL quickChannelStep(int direction){
+/* A channel written into assistant.json with everything else the file holds. */
+static BOOL quickChannelSet(NSString *name){
  NSString *path=quickAssistantPath(@"assistant.json");
  NSDictionary *existing=quickJSONFile(path);
  if(!existing&&[NSFileManager.defaultManager fileExistsAtPath:path])return NO;   // a file being edited by hand: leave it alone
- NSArray *names=quickChannels();NSUInteger i=[names indexOfObject:quickChannel()];
  NSMutableDictionary *next=existing?[existing mutableCopy]:[NSMutableDictionary new];
- next[@"channel"]=names[(i+names.count+(direction<0?-1:1))%names.count];
+ next[@"channel"]=name;
  NSData *data=[NSJSONSerialization dataWithJSONObject:next options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:nil];
  [NSFileManager.defaultManager createDirectoryAtPath:path.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
  return data&&[data writeToFile:path options:NSDataWritingAtomic error:nil];
+}
+/* The next channel in either direction (the arrow keys). */
+static BOOL quickChannelStep(int direction){
+ NSArray *names=quickChannels();NSUInteger i=[names indexOfObject:quickChannel()];
+ return quickChannelSet(names[(i+names.count+(direction<0?-1:1))%names.count]);
 }
 /* Each channel and whether it can answer here, as the hint service last found (below the AI channel row). */
 static NSString *quickChannelList(void){
@@ -143,7 +154,7 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
 }
 @interface TOTKQuickRow:NSButton
 @property(copy) NSString *value,*note;   // note: a short remark beside the name, in gold ("重启后生效")
-@property BOOL hovered,focused,binary,on;
+@property BOOL hovered,focused,binary,on,dropdown;
 @property NSInteger direction;
 @property(strong) NSTrackingArea *hoverArea;
 @end
@@ -158,6 +169,7 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
 -(void)mouseExited:(NSEvent *)e{(void)e;self.hovered=NO;self.needsDisplay=YES;}
 -(void)mouseDown:(NSEvent *)e{
  NSPoint p=[self convertPoint:e.locationInWindow fromView:nil];CGFloat split=NSWidth(self.bounds)*0.51;
+ if(self.dropdown&&p.x>=split&&self.enabled){[(TOTKShortcutHelp *)self.target focusQuickRow:self];[(TOTKShortcutHelp *)self.target quickOpenChoices:self];return;}
  self.direction=p.x>=split&&p.x<split+(NSWidth(self.bounds)-split)/2?-1:1;
  if(self.binary&&p.x>=split){BOOL requested=p.x<split+(NSWidth(self.bounds)-split)/2;if(requested==self.on){[(TOTKShortcutHelp *)self.target focusQuickRow:self];return;}}
  [super mouseDown:e];self.direction=1;
@@ -182,7 +194,10 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  }else{
   if(hot){[quickAccent() setFill];[[NSBezierPath bezierPathWithRoundedRect:choice xRadius:2 yRadius:2] fill];}
   quickText(self.value?:@"",NSMakeRect(split+27,(h-font-5)/2,w-split-58,font+7),font,ink,NSTextAlignmentCenter);
-  for(int i=0;i<2;i++){CGFloat x=i?NSMaxX(box)-14:NSMinX(box)+14,y=h/2;NSBezierPath *arrow=[NSBezierPath bezierPath];
+  if(self.dropdown){CGFloat x=NSMaxX(box)-16,y=h/2;NSBezierPath *caret=[NSBezierPath bezierPath];   // ▾: the choices open below
+   CGFloat down=self.isFlipped?1:-1;   // a button draws flipped: +y is down
+   [caret moveToPoint:NSMakePoint(x-5,y-3*down)];[caret lineToPoint:NSMakePoint(x+5,y-3*down)];[caret lineToPoint:NSMakePoint(x,y+3*down)];[caret closePath];[ink setFill];[caret fill];}
+  else for(int i=0;i<2;i++){CGFloat x=i?NSMaxX(box)-14:NSMinX(box)+14,y=h/2;NSBezierPath *arrow=[NSBezierPath bezierPath];
    [arrow moveToPoint:NSMakePoint(x+(i?-3:3),y+5)];[arrow lineToPoint:NSMakePoint(x+(i?3:-3),y)];[arrow lineToPoint:NSMakePoint(x+(i?-3:3),y-5)];[arrow closePath];[ink setFill];[arrow fill];}
  }
  if(hot){[NSGraphicsContext saveGraphicsState];NSShadow *glow=[NSShadow new];glow.shadowColor=[quickGold() colorWithAlphaComponent:0.5];glow.shadowBlurRadius=5;[glow set];[quickGold() setStroke];NSBezierPath *edge=[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(box,-1,-1) xRadius:4 yRadius:4];edge.lineWidth=2;[edge stroke];[NSGraphicsContext restoreGraphicsState];}
@@ -197,6 +212,24 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  [[quickInk() colorWithAlphaComponent:hot?0.9:0.25] setStroke];NSBezierPath *edge=[NSBezierPath bezierPathWithRoundedRect:r xRadius:2 yRadius:2];edge.lineWidth=hot?2:0.6;[edge stroke];
  CGFloat font=NSHeight(self.bounds)>=40?16:NSHeight(self.bounds)>=34?13:12;quickText(self.title,NSMakeRect(5,(NSHeight(self.bounds)-font-5)/2,NSWidth(self.bounds)-10,font+7),font,self.enabled?quickInk():[quickInk() colorWithAlphaComponent:0.4],NSTextAlignmentCenter);
 }
+@end
+/* A row's choices, dropped down over the menu: the whole menu catches the click that closes them, the list sits under (or
+   above) the row's value box. Esc closes, Up / Down move, Return or Space choose. */
+@interface TOTKQuickChoices:NSView
+@property NSRect list;
+@property(strong) NSMutableArray<TOTKQuickRow *> *options;
+@property NSInteger highlighted;
+@end
+@implementation TOTKQuickChoices
+-(BOOL)isOpaque{return NO;}
+-(void)mouseDown:(NSEvent *)e{(void)e;[(TOTKShortcutHelp *)self.superview quickCloseChoices];}   // outside every option
+-(void)drawRect:(NSRect)dirty{
+ (void)dirty;NSRect box=NSInsetRect(self.list,-6,-6);
+ [NSGraphicsContext saveGraphicsState];NSShadow *shade=[NSShadow new];shade.shadowColor=[NSColor colorWithWhite:0 alpha:0.7];shade.shadowBlurRadius=14;shade.shadowOffset=NSMakeSize(0,-4);[shade set];
+ [[NSColor colorWithCalibratedRed:0.03 green:0.035 blue:0.025 alpha:0.97] setFill];[[NSBezierPath bezierPathWithRoundedRect:box xRadius:5 yRadius:5] fill];[NSGraphicsContext restoreGraphicsState];
+ [[quickGold() colorWithAlphaComponent:0.55] setStroke];NSBezierPath *edge=[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(box,0.5,0.5) xRadius:5 yRadius:5];edge.lineWidth=1;[edge stroke];
+}
+-(void)highlight:(NSInteger)i{self.highlighted=(i+(NSInteger)self.options.count)%(NSInteger)self.options.count;for(NSUInteger k=0;k<self.options.count;k++){self.options[k].focused=(NSInteger)k==self.highlighted;self.options[k].needsDisplay=YES;}}
 @end
 @implementation TOTKShortcutHelp (QuickMenu)
 -(void)buildQuickMenu{
@@ -214,7 +247,7 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  NSArray *presets=@[@(TOTK_UI("性能","Performance")),@(TOTK_UI("均衡","Balanced")),@(TOTK_UI("画质","Quality"))];
  for(int i=0;i<3;i++){NSButton *b=[TOTKQuickPreset buttonWithTitle:presets[i] target:self action:@selector(quickPreset:)];b.tag=i;b.bordered=NO;b.enabled=settings_quick_apply!=NULL;[self.quickPresets addSubview:b];}
  self.quickRows=[NSMutableArray new];
- for(int i=0;i<QUICK_ROWS;i++){TOTKQuickRow *b=[TOTKQuickRow new];b.title=@(TOTK_UI(quickSpecs[i].zh,quickSpecs[i].en));b.tag=quickSpecs[i].action;b.target=self;b.action=@selector(quickAction:);b.bordered=NO;b.direction=1;b.binary=quickSpecs[i].kind==1;[self.quickBody addSubview:b];[self.quickRows addObject:b];}
+ for(int i=0;i<QUICK_ROWS;i++){TOTKQuickRow *b=[TOTKQuickRow new];b.title=@(TOTK_UI(quickSpecs[i].zh,quickSpecs[i].en));b.tag=quickSpecs[i].action;b.target=self;b.action=@selector(quickAction:);b.bordered=NO;b.direction=1;b.binary=quickSpecs[i].kind==1;b.dropdown=quickSpecs[i].kind==2;[self.quickBody addSubview:b];[self.quickRows addObject:b];}
  self.quickHelpTitle=[NSTextField labelWithString:@""];self.quickHelpTitle.textColor=quickInk();self.quickHelpTitle.font=[NSFont systemFontOfSize:24 weight:NSFontWeightMedium];[self addSubview:self.quickHelpTitle];
  self.quickHelpText=[NSTextField wrappingLabelWithString:@""];self.quickHelpText.textColor=quickInk();self.quickHelpText.font=[NSFont systemFontOfSize:16];self.quickHelpText.maximumNumberOfLines=0;[self addSubview:self.quickHelpText];
  self.quickStatus=[NSTextField labelWithString:@""];self.quickStatus.textColor=[quickInk() colorWithAlphaComponent:0.75];self.quickStatus.lineBreakMode=NSLineBreakByTruncatingTail;[self addSubview:self.quickStatus];
@@ -295,6 +328,33 @@ static NSString *quick_saved_note(BOOL ok){
  else self.quickNote.stringValue=quick_saved_note(settings_quick_step((int)sender.tag,direction));
  [self refresh];if(sender.tag==QUICK_CHANNEL)[self focusQuickRow:sender];[self.window makeFirstResponder:self.window.contentView];
 }
+-(void)quickOpenChoices:(TOTKQuickRow *)row{
+ [self quickCloseChoices];if(row.tag!=QUICK_CHANNEL)return;
+ TOTKQuickChoices *choices=[[TOTKQuickChoices alloc] initWithFrame:self.bounds];choices.options=[NSMutableArray array];
+ NSArray<NSString *> *names=quickChannels();NSString *current=quickChannel();
+ CGFloat split=NSWidth(row.bounds)*0.51,height=MAX(30,MIN(40,NSHeight(row.bounds)-4));
+ NSRect value=[row convertRect:NSMakeRect(split,0,NSWidth(row.bounds)-split-4,NSHeight(row.bounds)) toView:self];
+ CGFloat total=height*names.count,y=NSMinY(value)-total-6;
+ if(y<10)y=MIN(NSMaxY(value)+6,NSHeight(self.bounds)-total-10);   // no room below: above the row
+ choices.list=NSMakeRect(NSMinX(value),y,NSWidth(value),total);
+ for(NSUInteger i=0;i<names.count;i++){
+  NSDictionary *state=quickChannelState(names[i]);BOOL unusable=state&&![state[@"ok"] boolValue]&&![names[i] isEqual:@"auto"];
+  NSString *title=unusable?[quickChannelLabel(names[i]) stringByAppendingString:@(TOTK_UI("  · 不可用","  · unavailable"))]:quickChannelLabel(names[i]);
+  TOTKQuickPreset *option=[TOTKQuickPreset buttonWithTitle:title target:self action:@selector(quickChoose:)];option.bordered=NO;option.tag=(NSInteger)i;
+  option.state=[names[i] isEqual:current]?NSControlStateValueOn:NSControlStateValueOff;
+  option.frame=NSMakeRect(NSMinX(choices.list),NSMaxY(choices.list)-height*(i+1),NSWidth(choices.list),height);
+  option.accessibilityLabel=title;[choices addSubview:option];[choices.options addObject:option];
+ }
+ [choices highlight:(NSInteger)[names indexOfObject:current]];
+ self.quickChoices=choices;[self addSubview:choices];
+}
+-(void)quickCloseChoices{[self.quickChoices removeFromSuperview];self.quickChoices=nil;}
+-(void)quickChoose:(NSButton *)sender{
+ NSString *name=quickChannels()[(NSUInteger)sender.tag];[self quickCloseChoices];
+ BOOL ok=quickChannelSet(name);
+ self.quickNote.stringValue=ok?[NSString stringWithFormat:@(TOTK_UI("下一个问题起先用 %@","From the next question: %@ first")),quickChannelLabel(name)]:@(TOTK_UI("没能改写 assistant.json","Could not write assistant.json"));
+ [self refresh];for(TOTKQuickRow *row in self.quickRows)if(row.tag==QUICK_CHANNEL)[self focusQuickRow:row];[self.window makeFirstResponder:self.window.contentView];
+}
 -(void)quickHint:(id)sender{(void)sender;NSEvent *e=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:self.window.windowNumber context:nil characters:@"8" charactersIgnoringModifiers:@"8" isARepeat:NO keyCode:28];totk_hint_key(e,YES);}
 /* What a row shows for a setting this file reads itself (keys 6 and 7, the AI channel); the others come from
    settings_quick_value. */
@@ -318,6 +378,7 @@ static NSString *quick_saved_note(BOOL ok){
  self.collapseButton.contentTintColor=quickInk();
  self.quickTitle.hidden=self.quickScroll.hidden=self.quickNote.hidden=self.quickTabs.hidden=self.quickHelpTitle.hidden=self.quickHelpText.hidden=self.quickReturn.hidden=self.quickBackdrop.hidden=!full;
  self.quickStatus.hidden=!full||self.quickTab!=0;
+ if(self.quickChoices&&(!full||self.quickTab!=2))[self quickCloseChoices];
  self.label.hidden=full;
  self.layer.backgroundColor=[NSColor colorWithCalibratedRed:0.04 green:0.045 blue:0.03 alpha:full?0.62:0].CGColor;
  self.quickBlur.hidden=!full;self.layer.cornerRadius=0;self.layer.borderWidth=0;
@@ -360,6 +421,11 @@ static BOOL quick_menu_key(NSEvent *e,BOOL down){
  BOOL navigation=e.keyCode==53||e.keyCode==48||e.keyCode==36||e.keyCode==49||(e.keyCode>=123&&e.keyCode<=126);
  if(!navigation)return NO;if(!down){runtime_input_key_synthetic(e.keyCode,0);return YES;}
  TOTKShortcutHelp *panel=(TOTKShortcutHelp *)shortcutHelp;if(!panel)return NO;
+ if(panel.quickChoices){TOTKQuickChoices *choices=(TOTKQuickChoices *)panel.quickChoices;   // the open dropdown takes the keys
+  if(e.keyCode==125||e.keyCode==126)[choices highlight:choices.highlighted+(e.keyCode==125?1:-1)];
+  else if(e.keyCode==36||e.keyCode==49)[panel quickChoose:choices.options[(NSUInteger)choices.highlighted]];
+  else if(e.keyCode==53||e.keyCode==48)[panel quickCloseChoices];
+  return YES;}
  if(e.keyCode==53){[panel toggleCollapsed:nil];return YES;}
  if(e.keyCode==48){NSInteger next=(panel.quickTab+((e.modifierFlags&NSEventModifierFlagShift)?2:1))%3;
   for(NSButton *tab in panel.quickTabs.subviews)if(tab.tag==next)[panel quickTabAction:tab];return YES;}
@@ -368,6 +434,7 @@ static BOOL quick_menu_key(NSEvent *e,BOOL down){
   if(n==QUICK_HINT){[panel focusQuickHint];[panel.quickBody scrollRectToVisible:panel.quickHint.frame];}
   else{NSButton *row=panel.quickRows[n];[panel focusQuickRow:row];[panel.quickBody scrollRectToVisible:row.frame];}}
  else if(panel.quickFocused==QUICK_HINT){if(e.keyCode==36||e.keyCode==49)[panel quickHint:nil];}
+ else if((e.keyCode==36||e.keyCode==49)&&((TOTKQuickRow *)panel.quickRows[panel.quickFocused]).dropdown){TOTKQuickRow *row=(id)panel.quickRows[panel.quickFocused];if(row.enabled)[panel quickOpenChoices:row];}
  else{TOTKQuickRow *row=(id)panel.quickRows[panel.quickFocused];row.direction=e.keyCode==123?-1:1;if(row.enabled)[panel quickAction:row];row.direction=1;}
  return YES;
 }

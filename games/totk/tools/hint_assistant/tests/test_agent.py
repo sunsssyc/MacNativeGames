@@ -455,10 +455,11 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(backends.order('auto', cfg), ['agent', 'claude-code', 'codex', 'vertex-claude-code', 'vertex'])
         self.assertEqual(backends.order('codex', cfg), ['codex'])   # a request naming a backend still gets only that one
         cfg['agent'].update(provider='gemini', model='gemini-4-argon')
-        self.assertEqual(backends.label('agent', cfg), 'Gemini 4')
-        cfg['agent'].update(provider='openai', model='qwen3.8:27b-mlx')
-        self.assertEqual(backends.label('agent', cfg), 'qwen3.8:27b-mlx')
-        self.assertEqual(backends.label('vertex', cfg), 'Claude（Vertex）')
+        self.assertEqual(backends.label('agent', cfg), 'Gemini 4（Vertex AI）')
+        cfg['agent'].update(provider='openai', model='qwen3.8:27b-mlx', base_url='http://localhost:11434/v1')
+        self.assertEqual(backends.label('agent', cfg), 'qwen3.8:27b-mlx（本机）')
+        self.assertEqual(backends.label('vertex', cfg), 'Claude（Vertex AI）')
+        self.assertEqual(backends.label('claude-code', cfg), 'Claude Code（本机）')
 
     def test_service_reloads_settings_and_reports_channels(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -479,7 +480,7 @@ class ChannelTests(unittest.TestCase):
             written = json.loads((Path(folder) / service.BACKENDS).read_text())
             self.assertEqual(written['channel'], 'codex')
             self.assertEqual(written['order'][0], 'codex')
-            self.assertEqual(written['backends']['codex'], {'ok': False, 'why': 'no codex', 'label': 'Codex'})
+            self.assertEqual(written['backends']['codex'], {'ok': False, 'why': 'no codex', 'label': 'Codex（本机）'})
 
     def test_config_checks_the_channel(self):
         with tempfile.TemporaryDirectory() as folder:
