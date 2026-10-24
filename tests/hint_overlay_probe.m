@@ -51,6 +51,7 @@ int main(int argc,const char **argv){@autoreleasepool{
  NSWindow *w=[[NSWindow alloc] initWithContentRect:NSMakeRect(200,200,1000,680) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
  w.title=@"卡关助手界面验证";w.backgroundColor=[NSColor colorWithCalibratedRed:0.07 green:0.085 blue:0.06 alpha:1];
  totk_hint_install(w);hintFolder=@(argv[1]);
+ assert(!hintDock.hidesOnDeactivate);assert(hintDock.collectionBehavior&NSWindowCollectionBehaviorFullScreenAuxiliary);
  // A drag moves the companion without opening chat, persists, and stays in bounds after resizing.
  hintExpanded=NO;hintDockPositionLoaded=NO;hintDockPositionSet=NO;hintDockLayout();
  NSPoint origin=hintDock.frame.origin;

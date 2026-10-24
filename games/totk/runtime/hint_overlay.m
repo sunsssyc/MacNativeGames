@@ -466,6 +466,8 @@ void totk_hint_install(NSWindow *window) {
  hintVoiceCancel=[TOTKHintButton buttonWithTitle:@"取消录音" target:hintActions action:@selector(cancelVoice:)];((TOTKHintButton *)hintVoiceCancel).quiet=YES;hintVoiceCancel.hidden=YES;[hintPanel.contentView addSubview:hintVoiceCancel];
  hintVoiceInstall();
  hintDock=[[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,360,120) styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];hintDock.backgroundColor=NSColor.clearColor;hintDock.opaque=NO;hintDock.hasShadow=NO;
+ // The companion belongs to the game window, including background test windows.
+ hintDock.hidesOnDeactivate=NO;hintDock.collectionBehavior=NSWindowCollectionBehaviorFullScreenAuxiliary;
  NSImage *mini=[[NSImage alloc] initWithContentsOfFile:@"runtime/assets/riju-mini-fullbody.png"];
  NSButton *avatar=[TOTKHintAvatar buttonWithImage:mini?:hintPortrait.image?:[NSImage imageNamed:NSImageNameUser] target:hintActions action:@selector(open:)];hintAvatar=avatar;avatar.bordered=NO;avatar.imageScaling=NSImageScaleProportionallyUpOrDown;avatar.frame=NSMakeRect(284,0,76,96);avatar.toolTip=@"露珠 · 点击聊天，拖动调整位置";[avatar setAccessibilityLabel:@"露珠：点击打开对话，拖动调整位置"];[hintDock.contentView addSubview:avatar];
  hintBubble=[NSTextField wrappingLabelWithString:@"点击露珠，语音提问\n点击露珠，输入问题"];hintBubble.maximumNumberOfLines=6;hintBubble.lineBreakMode=NSLineBreakByTruncatingTail;hintBubble.cell.truncatesLastVisibleLine=YES;hintBubble.font=hintFont(13);hintBubble.textColor=hintInk();hintBubble.drawsBackground=NO;hintBubbleSurface=[TOTKHintBubble new];[hintBubbleSurface addSubview:hintBubble];[hintDock.contentView addSubview:hintBubbleSurface];
