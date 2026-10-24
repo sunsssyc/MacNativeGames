@@ -37,7 +37,7 @@ REQUEST = 'hint-request.json'
 RESPONSE = 'hint-response.json'
 BACKENDS = 'hint-backends.json'   # which channels can answer, for the game's settings menu (辅助 › AI 渠道)
 HISTORY = 'hint-history.json'     # the latest conversations from assistant.db, for the panel's 历史 (runtime/hint_history.inc)
-HISTORY_TURNS = 30
+HISTORY_SESSIONS = 20
 MAX_HISTORY_TURNS = 12
 MAX_SESSIONS = 8
 MAX_QUESTION_CHARS = 2000
@@ -60,7 +60,7 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
     backend's progress: ('tool', name) and ('text', the answer so far). scene_size (the picture's width, height) with
     scene_image offers mark_screen, and its marks come back in "marks". memory (a memory.Memory) adds what is
     remembered to the prompt, and "about" in the result is the place the save is in, for remembering this answer;
-    conversation (run, session) is the one `previous` comes from, which the remembered turns leave out."""
+    conversation (the panel's session id) is the one `previous` comes from, which the remembered turns leave out."""
     if cancel is not None and cancel.is_set():
         raise backendmod.Cancelled()
     tier = tier if tier in (1, 2, 3) else config['tier_default']
@@ -177,15 +177,22 @@ class Service:
         return True
 
     def write_history(self):
-        """hint-history.json: the latest turns, oldest first, for the panel's 历史 after the game restarts too."""
+        """hint-history.json for the panel's 历史 (after the game restarts too): the latest conversations, newest first,
+        each with a title (its first question), when, where, which channel, and its turns oldest first."""
         if not self.memory:
             return
         try:
-            rows = self.memory.turns(limit=HISTORY_TURNS)
-            _write(self.folder / HISTORY, {'time': time.time(), 'turns': [
-                {'time': r['time'], 'session': f"{r['run'] or '-'}/{r['session'] or '-'}", 'question': r['question'],
-                 'answer': r['answer'], 'tier': r['tier'], 'place': r['place_name'],
-                 'channel': backendmod.label(r['backend'], self.config) if r['backend'] else None} for r in reversed(rows)]})
+            sessions = []
+            for c in self.memory.conversations(HISTORY_SESSIONS):
+                turns, last = c['turns'], c['turns'][-1]
+                first = next((t['question'] for t in turns if t['question']), None)
+                sessions.append({'id': c['id'], 'title': first or '按进度给的提示', 'time': last['time'], 'started': turns[0]['time'],
+                                 'place': last['place_name'], 'tier': last['tier'],
+                                 'channel': backendmod.label(last['backend'], self.config) if last['backend'] else None,
+                                 'turns': [{'time': t['time'], 'question': t['question'], 'answer': t['answer'], 'tier': t['tier'],
+                                            'channel': backendmod.label(t['backend'], self.config) if t['backend'] else None}
+                                           for t in turns]})
+            _write(self.folder / HISTORY, {'time': time.time(), 'sessions': sessions})
         except Exception as e:   # the panel then shows this run's own list; answering is not affected
             self.log(f'[hint] could not write {HISTORY}: {e}')
 
@@ -217,6 +224,12 @@ class Service:
         question = question.strip()[:MAX_QUESTION_CHARS] if isinstance(question, str) else ''
         with self.lock:
             history = list(self.sessions.get(session, []))
+        if not history and self.memory:   # a conversation reopened from the panel's 历史, perhaps after a restart
+            try:
+                history = [{'tier': t['tier'] or 1, 'question': t['question'] or '', 'answer': t['answer']}
+                           for t in self.memory.conversation(session, MAX_HISTORY_TURNS)]
+            except Exception as e:
+                self.log(f'[hint] could not read the earlier turns of {session}: {e}')
         # Typed follow-ups retain the conversation, including replies at the same tier.
         # The original tier buttons still reveal only earlier, less detailed hints.
         previous = history if question else [(p['tier'], p['answer']) for p in history if p['tier'] < tier]
@@ -286,7 +299,7 @@ class Service:
             result = hint(self.config, tier, request.get('backend') or 'auto', question or None, previous,
                           request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image,
                           allow_actions=actions, on_event=event, scene_size=scene_size, memory=self.memory,
-                          conversation=(self.run_id, session))
+                          conversation=session)
         except backendmod.Cancelled:
             finish()
             self.voice.stop(str(request['id']))

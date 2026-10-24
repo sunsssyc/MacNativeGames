@@ -19,7 +19,7 @@ class HintHistoryTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             run = subprocess.run([str(executable), tmp], capture_output=True, text=True, timeout=20)
             self.assertEqual(run.returncode, 0, run.stderr)
-            self.assertIn("pass: panel history", run.stdout)
+            self.assertIn("pass: panel history list", run.stdout)
 
 
 if __name__ == "__main__":

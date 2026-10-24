@@ -92,7 +92,6 @@ static NSDictionary *hintJSON(NSString *path) {
  id value=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
  return [value isKindOfClass:NSDictionary.class]?value:nil;
 }
-#include "hint_history.inc"
 static NSColor *hintInk(void){return [NSColor colorWithCalibratedRed:0.99 green:0.975 blue:0.85 alpha:1];}
 static NSColor *hintAccent(void){return [NSColor colorWithCalibratedRed:0.88 green:0.40 blue:0.015 alpha:1];}
 static NSColor *hintSurface(void){return [NSColor colorWithCalibratedRed:0.055 green:0.06 blue:0.045 alpha:1];}
@@ -171,6 +170,7 @@ static void hintActionsEnd(void){hintActionsGranted=NO;hintRuntimeStop();}
 -(BOOL)resignFirstResponder{BOOL result=[super resignFirstResponder];self.needsDisplay=YES;return result;}
 @end
 static NSFont *hintFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-Regular" size:size]?:[NSFont systemFontOfSize:size];}
+#include "hint_history.inc"
 @interface TOTKHintButton:NSButton
 @property BOOL primary;
 @property BOOL quiet;
@@ -234,6 +234,7 @@ static void hintLayout(CGFloat height){
  CGFloat bodyBottom=hintWelcome?164:146;
  hintScroll.frame=NSMakeRect(20,bodyBottom,bodyWidth,MAX(40,h-bodyBottom-78));
  hintText.frame=NSMakeRect(0,0,bodyWidth,MAX(hintScroll.contentSize.height,bodyHeight));
+ hintHistoryLayout(bodyWidth);   // 历史's list in the text's place (hint_history.inc)
  hintVoiceSetup.hidden=hintVoiceSetup.hidden||hintWelcome;hintVoiceSetup.frame=NSMakeRect(w-108,19,88,28);
  hintDisclosure.frame=NSMakeRect(20,16,w-40-(hintVoiceSetup.hidden?0:96),hintWelcome?82:34);
  hintQuestion.hidden=hintSend.hidden=hintWelcome;
@@ -244,7 +245,7 @@ static void hintLayout(CGFloat height){
  hintPointButton.hidden=hintWelcome||hintWorking||!hintSceneReady||!hintExpanded;
  hintPointButton.toolTip=@"把这个问题和暂停的画面一起发给露珠，她会在画面上圈出来（只对这个问题有效）";
  hintHistoryButton.hidden=hintWelcome||hintHistoryCount()==0;
- hintHistoryButton.title=hintHistoryExpanded?@"最新回复":@"历史";
+ hintHistoryButton.title=hintHistoryButtonTitle();
  hintHistoryButton.frame=NSMakeRect(w-124,104,48,28);
  hintActionsButton.frame=NSMakeRect(w-190,104,64,28);
  hintActionsButton.hidden=hintWelcome||hintWorking||!hintActionsAllowed();
@@ -305,7 +306,7 @@ static BOOL hintWrite(NSDictionary *value) {
 
 @implementation TOTKHintActions
 -(void)open:(id)sender{(void)sender;hintOpen();}
--(void)history:(id)sender{(void)sender;hintHistoryExpanded=!hintHistoryExpanded;hintText.stringValue=hintHistoryExpanded?hintHistoryText():hintDone?hintPageText(hintLatest):hintLatest;hintLayout(0);[hintScroll.contentView scrollToPoint:NSZeroPoint];[hintScroll reflectScrolledClipView:hintScroll.contentView];}
+-(void)history:(id)sender{(void)sender;hintHistoryToggle();}
 -(void)voice:(id)sender{(void)sender;if(hintListening)hintVoiceEnd(NO);else hintVoiceBegin();}
 -(void)cancelVoice:(id)sender{(void)sender;hintVoiceEnd(YES);}
 // 指给我看: the typed question (or a plain "what now") with the frame on screen, for marks drawn on it (hint_scene.inc).
@@ -505,6 +506,7 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
   hintShow(@"无法创建卡关助手的数据目录。");return YES;
  }
  if(!hintStart())return YES;
+ hintHistoryAdopt();   // a conversation open in 历史 goes on (hint_history.inc)
  BOOL fresh=!hintSession||(event.modifierFlags&NSEventModifierFlagShift);
  if(fresh){[hintHistory removeAllObjects];hintSession=NSUUID.UUID.UUIDString;hintTier=[config[@"tier_default"] integerValue];if(hintTier<1||hintTier>3)hintTier=1;}
  else if(hintDone&&!hintPendingQuestion.length&&hintTier<3)hintTier++;

@@ -125,6 +125,21 @@ class Memory:
         with self._db() as db:
             return [dict(r) for r in db.execute(sql + ' ORDER BY id DESC LIMIT ?', args + [max(1, int(limit))])]
 
+    def conversation(self, session, limit=12):
+        """The turns of one panel conversation, oldest first, whichever game run they were in: the panel's session ids
+        are unique, so a conversation reopened from 历史 after a restart goes on with its earlier turns."""
+        with self._db() as db:
+            rows = [dict(r) for r in db.execute('SELECT * FROM turns WHERE session = ? ORDER BY id DESC LIMIT ?',
+                                                (str(session), max(1, int(limit))))]
+        return list(reversed(rows))
+
+    def conversations(self, limit=20, turns=12):
+        """The latest panel conversations, newest first: [{"id", "turns": [...oldest first]}]."""
+        with self._db() as db:
+            ids = [r[0] for r in db.execute('SELECT session FROM turns WHERE session IS NOT NULL GROUP BY session '
+                                            'ORDER BY MAX(id) DESC LIMIT ?', (max(1, int(limit)),))]
+        return [{'id': i, 'turns': self.conversation(i, turns)} for i in ids]
+
     def recall(self, query=None, about=None, limit=12):
         """The memory tool: notes and earlier answers that mention the words of query or are about the place id `about`."""
         words = [w.lower() for w in str(query or '').split()]
@@ -147,14 +162,14 @@ class Memory:
 
     def context(self, about=None, recent=3, same_place=3, skip=None):
         """Lines for the prompt: every note, then earlier answers about the same place, then the latest answers.
-        skip: (run, session) whose turns the prompt already carries as this conversation."""
+        skip: the panel session whose turns the prompt already carries as this conversation."""
         lines = [f'- 记下的：{n["text"]}（{_day(n["time"])}）' for n in self.notes()[-12:]]
         seen = set()
 
         def fresh(rows, n):
             out = []
             for r in rows:
-                if r['id'] in seen or (skip and r['run'] == skip[0] and r['session'] == str(skip[1])):
+                if r['id'] in seen or (skip is not None and r['session'] == str(skip)):
                     continue
                 seen.add(r['id'])
                 out.append(r)

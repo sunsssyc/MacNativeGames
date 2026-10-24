@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -313,7 +314,7 @@ class MemoryTests(unittest.TestCase):
         self.assertTrue(any('在吉鲁塔古马奇神庙问“这个神庙怎么过”（1 档，claude-code）→ 答“先往左边走。”' in l for l in lines), lines)
         self.assertTrue(any('问题3' in l for l in lines))
         self.assertFalse(any('问题0' in l for l in lines))   # only the latest three besides the same place
-        self.assertFalse(any('问题' in l for l in self.m.context(None, skip=('run1', 4))))   # this conversation is in the prompt already
+        self.assertFalse(any('问题' in l for l in self.m.context(None, skip=4)))   # this conversation is in the prompt already
         self.assertEqual(len(self.m.recall('神庙')['answers']), 1)
         self.assertEqual(len(self.m.recall(about='Dungeon045')['answers']), 1)
         full = self.m.history('神庙')['turns'][0]
@@ -370,7 +371,7 @@ class MemoryTests(unittest.TestCase):
         cfg = copy.deepcopy(config.DEFAULTS)
         with patch.object(backends, 'make', return_value=backend), \
              patch.object(harness.Harness, 'whereabouts', return_value={'id': 'Dungeon045', 'name': '吉鲁塔古马奇神庙'}):
-            result = service.hint(cfg, question='怎么过', allow_screenshot=False, memory=self.m, conversation=('r', 7))
+            result = service.hint(cfg, question='怎么过', allow_screenshot=False, memory=self.m, conversation=7)
         self.assertIn('记忆（之前在这台 Mac 上的求助', seen['prompt'])
         self.assertNotIn('这一轮的回答', seen['prompt'])   # the conversation itself comes as `previous`, not as memory
         self.assertIn('- shrine-puzzle：', seen['prompt'])
@@ -521,18 +522,33 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(limits['agent'], 90)
         self.assertEqual(config.DEFAULTS['agent']['effort'], 'low')
 
-    def test_history_file_for_the_panel(self):
+    def test_history_file_for_the_panel_and_resuming(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'assistant.json'
             path.write_text(json.dumps({'enabled': True, 'agent': {'provider': 'gemini', 'model': 'gemini-4-argon'}}))
             svc = service.Service(config.load(path), folder, log=lambda line: None)
-            for i in range(service.HISTORY_TURNS + 2):
-                svc.memory.record_answer(f'问题{i}', 1, f'回答{i}', {'id': 'Dungeon045', 'name': '吉鲁塔古马奇神庙'}, 'agent', 'r1', 2)
+            shrine = {'id': 'Dungeon045', 'name': '吉鲁塔古马奇神庙'}
+            svc.memory.record_answer('这个神庙怎么过', 1, '先往左走。', shrine, 'claude-code', 'r1', 'S1')
+            svc.memory.record_answer(None, 2, '用翼和平台车。', shrine, 'agent', 'r1', 'S1')
+            for i in range(service.HISTORY_SESSIONS + 1):
+                svc.memory.record_answer(f'问题{i}', 1, f'回答{i}', None, 'agent', 'r2', f'T{i}')
+            svc.memory.record_answer('宝箱呢', 3, '右侧高台。', shrine, 'agent', 'r3', 'S1')   # S1 again, after a restart
             svc.write_history()
-            turns = json.loads((Path(folder) / service.HISTORY).read_text())['turns']
-        self.assertEqual(len(turns), service.HISTORY_TURNS)
-        self.assertEqual((turns[0]['question'], turns[-1]['question']), ('问题2', f'问题{service.HISTORY_TURNS + 1}'))   # oldest first
-        self.assertEqual((turns[-1]['channel'], turns[-1]['place'], turns[-1]['session']), ('Gemini 4（Vertex AI）', '吉鲁塔古马奇神庙', 'r1/2'))
+            sessions = json.loads((Path(folder) / service.HISTORY).read_text())['sessions']
+            self.assertEqual(len(sessions), service.HISTORY_SESSIONS)
+            first = sessions[0]   # newest first: S1 was continued last
+            self.assertEqual((first['id'], first['title'], first['place'], first['channel'], first['tier']),
+                             ('S1', '这个神庙怎么过', '吉鲁塔古马奇神庙', 'Gemini 4（Vertex AI）', 3))
+            self.assertEqual([t['answer'] for t in first['turns']], ['先往左走。', '用翼和平台车。', '右侧高台。'])
+            self.assertEqual(first['turns'][0]['channel'], 'Claude Code（本机）')
+            # a question in S1 after another restart: the service finds the earlier turns in the database
+            seen = {}
+            fake = lambda cfg, tier, backend, question, previous, *rest, **kw: (seen.update(previous=previous, conversation=kw.get('conversation'))
+                                                                               or {'text': '好。', 'tier': tier, 'backend': 'agent', 'seconds': 1, 'attempts': []})
+            with patch.object(service, 'hint', side_effect=fake), patch.object(svc, 'respond'):
+                svc.work({'id': 1, 'session': 'S1', 'question': '然后呢'}, threading.Event())
+        self.assertEqual([p['answer'] for p in seen['previous']], ['先往左走。', '用翼和平台车。', '右侧高台。'])
+        self.assertEqual(seen['conversation'], 'S1')
 
     def test_config_checks_the_channel(self):
         with tempfile.TemporaryDirectory() as folder:

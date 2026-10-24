@@ -173,7 +173,7 @@ def main(argv=None):
             from .memory import Memory
             memory = Memory(args.memory) if args.memory else None
             result = service.hint(config, args.tier, args.backend, args.question, None, args.screenshot, args.romfs,
-                                  args.save_root, memory=memory)
+                                  args.save_root, memory=memory, conversation='cli')
             if memory:
                 memory.record_answer(args.question, result['tier'], result['text'], result.get('about'), result['backend'])
             if args.json:
