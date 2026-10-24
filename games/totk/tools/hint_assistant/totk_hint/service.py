@@ -32,18 +32,21 @@ from .romfs import DATA_DIR
 
 REQUEST = 'hint-request.json'
 RESPONSE = 'hint-response.json'
+GUIDE_REQUEST = 'guide-request.json'
+GUIDE_RESPONSE = 'guide-response.json'
 MAX_HISTORY_TURNS = 12
 MAX_SESSIONS = 8
 MAX_QUESTION_CHARS = 2000
 STAGES = {'game_state': '正在看存档', 'quest_log': '正在看任务日志', 'search_text': '正在查游戏文本',
           'screenshot': '正在看画面', 'runtime_state': '正在看林克的位置', 'wait_state': '正在看林克的位置',
-          'press_button': '正在操作游戏', 'stop_action': '正在松开按键', 'mark_screen': '正在圈画面',
+          'press_button': '正在操作游戏', 'press_sequence': '正在操作游戏', 'stop_action': '正在松开按键',
+          'mark_screen': '正在圈画面',
           'Read': '正在看画面'}   # Read: Claude Code opening the attached picture
 
 
 def hint(config, tier=None, backend='auto', question=None, previous=None, allow_screenshot=None, romfs=None,
          save_root=None, cancel=None, progress=None, scene_image=None, allow_actions=False, on_event=None,
-         scene_size=None):
+         scene_size=None, action_limit=None):
     """{"text", "tier", "backend", "model", "seconds", "attempts"}; raises BackendError when no backend answers.
     Each backend gets timeout_seconds, all of them together total_timeout_seconds. allow_actions offers the input tools
     (the caller checks assistant.json allow_actions and the player's consent for this request). on_event gets the
@@ -57,7 +60,7 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
     t0 = time.monotonic()
     deadline = t0 + config['total_timeout_seconds']
     # Nothing is read ahead (prefetch_state is a legacy key): the model picks its observations through the tools.
-    prompt = user_prompt(tier, question, previous, shots, allow_actions)
+    prompt = user_prompt(tier, question, previous, shots, allow_actions, action_limit)
     if scene_image and scene_size:
         prompt += (f'\n本次当前画面：已附带面板打开时的游戏画面（游戏在面板后暂停，窗口里就是这一帧），'
                    f'{scene_size[0]}×{scene_size[1]} 像素。先看画面，再回答；存档只作为历史背景。'
@@ -148,6 +151,8 @@ class Service:
         previous = history if question else [(p['tier'], p['answer']) for p in history if p['tier'] < tier]
         # Input tools only when assistant.json allows them and the player allowed this question in the panel.
         actions = bool(self.config.get('allow_actions')) and request.get('actions') is True and bool(question)
+        budget = request.get('action_limit')
+        budget = budget if isinstance(budget, int) and not isinstance(budget, bool) and 1 <= budget <= 40 else None
         limit = self.config['total_timeout_seconds']
         reading = request.get('read') is True
         if reading:   # read line by line as the answer streams; the voice gets ready while the model works
@@ -209,7 +214,7 @@ class Service:
         try:
             result = hint(self.config, tier, request.get('backend') or 'auto', question or None, previous,
                           request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image,
-                          allow_actions=actions, on_event=event, scene_size=scene_size)
+                          allow_actions=actions, on_event=event, scene_size=scene_size, action_limit=budget)
         except backendmod.Cancelled:
             finish()
             self.voice.stop(str(request['id']))
@@ -243,6 +248,17 @@ class Service:
         self.respond(request, 'done', tier=tier, text=result['text'], backend=result['backend'],
                      seconds=result['seconds'], next_tier=tier + 1 if tier < 3 else None,
                      tier_name=TIER_NAMES[tier], marks=result.get('marks'))
+
+    def guide(self, request):
+        """Answer a guide request from the newest save; no model, no screenshot, no session state."""
+        ident = request.get('id')
+        try:
+            target = Harness(self.config, self.romfs, self.save_root).guide()
+            value = {'id': ident, 'ok': True, 'target': target, 'time': time.time()}
+        except Exception as e:   # the panel says why instead of waiting for an arrow that never comes
+            self.log(f'[guide] failed: {e}')
+            value = {'id': ident, 'ok': False, 'error': str(e)[:200], 'time': time.time()}
+        _write(self.folder / GUIDE_RESPONSE, value)
 
     def handle(self, request):
         if not isinstance(request.get('id'), (str, int)) or not isinstance(request.get('session', request['id']), (str, int)):
@@ -279,6 +295,11 @@ class Service:
                 pass
             if accept_pending:
                 seen, stamp = None, None
+            guide_path = self.folder / GUIDE_REQUEST
+            try:   # a guide request left from before this service started is not answered
+                guide_stamp = guide_path.stat().st_mtime_ns
+            except OSError:
+                guide_stamp = None
             voice_path = self.folder / voicemod.REQUEST
             try:   # 朗读 requests are never pending across a restart: the panel asks again
                 voice_stamp = voice_path.stat().st_mtime_ns
@@ -302,6 +323,9 @@ class Service:
                         seen = request.get('id')
                         self.log(f'[hint] request {json.dumps(request, ensure_ascii=False)}')
                         self.handle(request)
+                    request, guide_stamp = self._changed(guide_path, guide_stamp)
+                    if isinstance(request, dict):
+                        self.guide(request)
                     request, voice_stamp = self._changed(voice_path, voice_stamp)
                     if isinstance(request, dict):
                         self.voice.handle(request)

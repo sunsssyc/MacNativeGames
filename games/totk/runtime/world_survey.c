@@ -20,6 +20,7 @@
 #ifdef GAME_BOTW
 int runtime_live_player(float xyz[3]){(void)xyz;return -1;}
 int runtime_live_scene(RuntimeScene *out,float radius){(void)out;(void)radius;return -1;}
+int runtime_live_facing(float player_rot[9],float camera_rot[9],float camera_pos[3]){(void)player_rot;(void)camera_rot;(void)camera_pos;return -1;}
 /* Breath of the Wild 1.6.0: no frame-end hook (the survey sync object is never found, see runtime_survey_sync), so
    "survey pos" reads and "survey move" writes the player's position from the command thread. The pointer chains from
    main's data segment are the ones Bloom (Swiffy22) found for 1.6.0 (the botw-save-state tool uses them); the code is
@@ -235,7 +236,10 @@ static void survey_debug_layout(uintptr_t module, uintptr_t scene) {
         }
     }
 }
-static uintptr_t player_actor(void) {
+/* The resident list named in the comment above: the player and the cameras. Both are returned when found, so the
+   guide arrow can read the camera's rotation without walking the actor table. */
+static int resident_actors(uintptr_t *player_out, uintptr_t *camera_out) {
+    *player_out = 0; if (camera_out) *camera_out = 0;
     uintptr_t module = read_ptr(survey_main + SCENE_SLOT);
     uintptr_t scene = module ? read_ptr(module + 0x1e8) : 0;
     survey_debug_layout(module, scene);
@@ -250,13 +254,31 @@ static uintptr_t player_actor(void) {
         uintptr_t data = read_ptr(links + (uintptr_t)i * 0x70 + 8);
         uintptr_t actor = data ? read_ptr(data + 0x40) : 0;
         uintptr_t name = actor ? read_ptr(actor + GAME_ACTOR_NAME) : 0;
-        char text[7];
-        if (name && read_mem(name, text, sizeof text) && !memcmp(text, "Player", 7)) {
+        char text[16] = {0};
+        if (!name || !read_mem(name, text, sizeof text - 1)) continue;
+        if (!strcmp(text, "Player")) {
             float xyz[3];
-            if (read_mem(actor + ACTOR_POS, xyz, sizeof xyz) && valid_xyz(xyz)) return actor;
+            if (read_mem(actor + ACTOR_POS, xyz, sizeof xyz) && valid_xyz(xyz)) *player_out = actor;
+        } else if (camera_out && !strcmp(text, "PlayerCamera")) {
+            *camera_out = actor;
         }
     }
-    return 0;
+    return *player_out ? 1 : 0;
+}
+static uintptr_t player_actor(void) {
+    uintptr_t player = 0;
+    resident_actors(&player, NULL);
+    return player;
+}
+/* A rotation is usable when every value is finite and sane; a camera may look down, so the axis lengths are what is
+   checked rather than a fixed facing. */
+static int usable_rotation(const float r[9]) {
+    for (int i = 0; i < 9; ++i) if (!isfinite(r[i]) || fabsf(r[i]) > 4) return 0;
+    for (int row = 0; row < 3; ++row) {
+        float n = sqrtf(r[row * 3] * r[row * 3] + r[row * 3 + 1] * r[row * 3 + 1] + r[row * 3 + 2] * r[row * 3 + 2]);
+        if (n < 0.5f || n > 2) return 0;
+    }
+    return 1;
 }
 /* A string in game memory, cut at its first non-printable byte (empty when unreadable). */
 static void survey_text(uintptr_t at, char *out, size_t size) {
@@ -309,7 +331,11 @@ int runtime_live_scene(RuntimeScene *out, float radius) {
         float dx = xyz[0] - out->player[0], dy = xyz[1] - out->player[1], dz = xyz[2] - out->player[2];
         float d = sqrtf(dx * dx + dy * dy + dz * dz);
         if (d > radius || !actor_name(a, name, sizeof name)) continue;
-        if (!strcmp(name, "PlayerCamera")) { memcpy(out->camera, xyz, sizeof xyz); out->has_camera = 1; }
+        if (!strcmp(name, "PlayerCamera")) {
+            memcpy(out->camera, xyz, sizeof xyz); out->has_camera = 1;
+            float rot[9];
+            if (read_mem(a + ACTOR_ROT, rot, sizeof rot) && usable_rotation(rot)) { memcpy(out->cam_rot, rot, sizeof rot); out->has_cam_rot = 1; }
+        }
         /* what Link wears and holds, and the game's machinery, sit on him: they would fill the list */
         if (d < 1.5f || strstr(name, "SystemActor") || strstr(name, "Camera")) continue;
         int full = out->actors == 40;   /* insert nearest first; a full list drops the farthest */
@@ -328,6 +354,20 @@ int runtime_live_player(float xyz[3]) {
     uintptr_t actor=player_actor();
     if(!actor)return 0;
     return read_mem(actor+ACTOR_POS,xyz,3*sizeof(float))&&valid_xyz(xyz)?1:0;
+}
+int runtime_live_facing(float player_rot[9], float camera_rot[9], float camera_pos[3]) {
+    if (!survey_main) return -1;
+    uintptr_t player = 0, camera = 0;
+    float rot[9];
+    if (!resident_actors(&player, &camera) || !player) return 0;
+    if (!read_mem(player + ACTOR_ROT, rot, sizeof rot) || !usable_rotation(rot)) return 0;
+    memcpy(player_rot, rot, sizeof rot);
+    if (!camera || !read_mem(camera + ACTOR_ROT, rot, sizeof rot) || !usable_rotation(rot)) return 1;
+    memcpy(camera_rot, rot, sizeof rot);
+    float xyz[3];
+    if (camera_pos && read_mem(camera + ACTOR_POS, xyz, sizeof xyz) && valid_xyz(xyz)) memcpy(camera_pos, xyz, sizeof xyz);
+    else if (camera_pos) { camera_pos[0] = camera_pos[1] = camera_pos[2] = 0; return 1; }
+    return 3;
 }
 void runtime_survey_init(Module *m) {
     if(!strcmp(m->name,"main")&&SCENE_SLOT+8u<=m->size){survey_main=(uintptr_t)m->base;survey_main_size=m->size;}

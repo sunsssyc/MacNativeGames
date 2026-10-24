@@ -23,7 +23,7 @@ from . import tables as tablemod
 
 RUN_PY = Path(__file__).resolve().parents[1] / 'run.py'
 TOOLS = ('wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text')
-ACTION_TOOLS = ('press_button', 'stop_action')   # only for a request the player allowed to act (Context.allow_actions)
+ACTION_TOOLS = ('press_button', 'press_sequence', 'stop_action')   # only for a request the player allowed to act (Context.allow_actions)
 CODEX_FEATURES_OFF = ('apps', 'browser_use', 'browser_use_external', 'computer_use', 'image_generation', 'in_app_browser',
                       'plugins', 'remote_plugin', 'hooks', 'goals', 'memories')
 

@@ -5,6 +5,10 @@ hint is grounded instead of guessed. Shared by the MCP server (Claude Code, Code
     quest_log    active quests with the adventure log's text for the current step and where its map targets are
     search_text  the game's Simplified Chinese text (quests, places, items, tips, dialogue)
     screenshot   the game window, only while the game runs and only when the player allowed it
+    runtime_state / wait_state  the running game from memory: position, facing, camera, nearby actors, and the changes
+                                since the previous reading
+    press_button / press_sequence / stop_action  game input, only for a request the player allowed to act
+    mark_screen  circles and arrows on the frame the panel opened on, only for 指给我看
 
 Everything is read-only. The only thing ever written outside the cache is the "wshot <png>" line the game's command
 channel understands (runtime/input.c), and only for screenshot."""
@@ -408,6 +412,31 @@ class Harness:
             out['other_quests_done_count'] = len(done) - len(main_done)
         return out
 
+    def guide(self, slot=None):
+        """The target the guide arrow should point at: a main quest's current step first, then the nearest one.
+
+        Read from the newest save (the map target of the step the player is on) and the save's Link position; the
+        arrow's bearing and the distance while walking are computed in the game from live data, so this is asked for
+        once and then kept up to date without another save read."""
+        log = self.quest_log(limit=20, slot=slot)
+        link = log.get('link_xyz')
+        best = None
+        for entry in log.get('active') or ():
+            main = entry.get('type') == tablemod.CATEGORY_NAMES.get('Main')
+            for target in entry.get('targets') or ():
+                xyz = target.get('xyz')
+                if not isinstance(xyz, list) or len(xyz) != 3:
+                    continue
+                distance = None
+                if link and len(link) == 3:
+                    distance = math.dist(link, xyz)
+                rank = (0 if main else 1, distance if distance is not None else float('inf'))
+                if best is None or rank < best[0]:
+                    best = (rank, {'name': target.get('near') or entry.get('quest'), 'quest': entry.get('quest'),
+                                   'step': entry.get('step'), 'xyz': xyz,
+                                   'distance_m': round(distance) if distance is not None else None})
+        return best[1] if best else None
+
     def search_text(self, query, limit=10):
         terms = [w.lower() for w in str(query or '').split() if w]
         if not terms:
@@ -543,6 +572,19 @@ class Harness:
                      'button': {'type': 'string', 'enum': list(BUTTONS)},
                      'duration_ms': {'type': 'integer', 'minimum': 30, 'maximum': 1000}},
                      'required': ['button'], 'additionalProperties': False}},
+                {'name': 'press_sequence',
+                 'description': 'Perform a short run of game inputs the player asked for, one after another, and return '
+                                'live state once they are done: 1..8 steps of 30..1000 ms with a 0..1000 ms wait after '
+                                'each. Every step counts against the same per-request budget as press_button, so a run '
+                                'that costs more than the budget left is refused outright. Changes gameplay.',
+                 'inputSchema': {'type': 'object', 'properties': {
+                     'steps': {'type': 'array', 'minItems': 1, 'maxItems': 8, 'items': {
+                         'type': 'object', 'properties': {
+                             'button': {'type': 'string', 'enum': list(BUTTONS)},
+                             'duration_ms': {'type': 'integer', 'minimum': 30, 'maximum': 1000},
+                             'wait_ms': {'type': 'integer', 'minimum': 0, 'maximum': 1000}},
+                         'required': ['button'], 'additionalProperties': False}}},
+                     'required': ['steps'], 'additionalProperties': False}},
                 {'name': 'stop_action', 'description': 'Release the runtime tool input.',
                  'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
             ]
@@ -587,13 +629,14 @@ class Harness:
     def call(self, name, arguments=None):
         """Run a tool: (JSON text, image path or None). Raises ToolError for answers the model should see as errors."""
         args = dict(arguments or {})
-        if name in ('press_button', 'stop_action') and not self.allow_actions:
+        if name in ('press_button', 'press_sequence', 'stop_action') and not self.allow_actions:
             raise ToolError('玩家没有允许这次求助操作游戏')
-        if name in ('runtime_state', 'press_button', 'stop_action', 'wait_state'):
+        if name in ('runtime_state', 'press_button', 'press_sequence', 'stop_action', 'wait_state'):
             from .live import call
-            op = {'runtime_state': 'state', 'press_button': 'press', 'stop_action': 'stop', 'wait_state': 'wait'}[name]
+            op = {'runtime_state': 'state', 'press_button': 'press', 'press_sequence': 'sequence',
+                  'stop_action': 'stop', 'wait_state': 'wait'}[name]
             try:
-                result = call(op, args.get('button'), args.get('duration_ms', 150))
+                result = call(op, args.get('button'), args.get('duration_ms', 150), steps=args.get('steps'))
             except (ValueError, TimeoutError, OSError) as e:
                 raise ToolError(str(e)) from e
             if isinstance(result, dict) and isinstance(result.get('state'), dict):
