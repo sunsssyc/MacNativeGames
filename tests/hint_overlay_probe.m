@@ -46,6 +46,26 @@ int main(int argc,const char **argv){@autoreleasepool{
  NSWindow *w=[[NSWindow alloc] initWithContentRect:NSMakeRect(200,200,1000,680) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
  w.title=@"卡关助手界面验证";w.backgroundColor=[NSColor colorWithCalibratedRed:0.07 green:0.085 blue:0.06 alpha:1];
  totk_hint_install(w);hintFolder=@(argv[1]);
+ // A drag moves the companion without opening chat, persists, and stays in bounds after resizing.
+ hintExpanded=NO;hintDockPositionLoaded=NO;hintDockPositionSet=NO;hintDockLayout();
+ NSPoint origin=hintDock.frame.origin;
+ NSEvent *(^mouse)(NSEventType,NSPoint)=^NSEvent *(NSEventType type,NSPoint screen){
+  return [NSEvent mouseEventWithType:type location:[w convertPointFromScreen:screen] modifierFlags:0 timestamp:0
+    windowNumber:w.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+ };
+ [hintAvatar mouseDown:mouse(NSEventTypeLeftMouseDown,origin)];
+ [hintAvatar mouseDragged:mouse(NSEventTypeLeftMouseDragged,NSMakePoint(origin.x-120,origin.y+70))];
+ [hintAvatar mouseUp:mouse(NSEventTypeLeftMouseUp,NSMakePoint(origin.x-120,origin.y+70))];
+ assert(!hintExpanded);assert(fabs(hintDock.frame.origin.x-(origin.x-120))<1);
+ assert(hintJSON(hintPath(@"companion-position.json"))!=nil);
+ NSPoint saved=hintDock.frame.origin;hintDockPositionLoaded=NO;hintDockPositionSet=NO;hintDockLayout();
+ assert(NSEqualPoints(saved,hintDock.frame.origin));
+ [hintAvatar mouseDown:mouse(NSEventTypeLeftMouseDown,saved)];
+ [hintAvatar mouseDragged:mouse(NSEventTypeLeftMouseDragged,NSMakePoint(-10000,10000))];
+ [hintAvatar mouseUp:mouse(NSEventTypeLeftMouseUp,NSMakePoint(-10000,10000))];
+ [w setContentSize:NSMakeSize(640,480)];hintDockLayout();
+ assert(NSContainsRect([w convertRectToScreen:w.contentView.bounds],hintDock.frame));
+ [w setContentSize:NSMakeSize(1000,680)];hintDockLayout();
  NSString *path=hintPath(@"assistant.json");
  [@"{\"enabled\":false,\"allow_screenshot\":false,\"custom\":42}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
  [hintActions enable:nil];NSDictionary *c=hintJSON(path);assert([c[@"enabled"] boolValue]);assert([c[@"custom"] intValue]==42);assert(![c[@"allow_screenshot"] boolValue]);

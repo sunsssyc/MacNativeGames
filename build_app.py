@@ -1279,6 +1279,7 @@ def step_app(tree, out, logs, *, version="v0", game='totk'):
              f'rewritten/{version}/subsdk0.patched.bin', f'extracted/{version}/romfs/runtime-index.bin']   # romfs.bin: data_bundle
     if game == 'totk':
         clone(tree / 'runtime/assets/riju-companion.png', res / 'runtime/assets/riju-companion.png')
+        clone(tree / 'runtime/assets/riju-mini-fullbody.png', res / 'runtime/assets/riju-mini-fullbody.png')
         for source in sorted((tree / 'tools/hint_assistant').rglob('*.py')):
             clone(source, res / source.relative_to(tree))
     files += ['build/pso_manifest.tsv', 'build/pso_title.tsv']   # exported from the game's shared shader list (games/totk/Makefile)
