@@ -261,6 +261,29 @@ class ProviderTests(unittest.TestCase):
         with patch('urllib.request.urlopen', return_value=Response()):
             self.assertEqual(list(agent.sse('http://x', {}, {}, 5)), [{'a': 1}])
 
+    def test_gemini_on_vertex_keeps_the_thought_signature(self):
+        rest = type('Rest', (), {'config': {'vertex': {'project': 'p'}}, 'available': lambda self: (True, ''),
+                                 'token': lambda self: 'ya29.t'})()
+        p = agent.GeminiProvider(rest, {'model': 'gemini-4-argon'})
+        self.assertEqual(p.model, 'google/gemini-4-argon')
+        self.assertEqual(p.url, 'https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi/chat/completions')
+        signature = {'google': {'thought_signature': 'AY89'}}
+        chunks = [{'choices': [{'delta': {'role': 'assistant', 'tool_calls': [
+                      {'extra_content': signature, 'function': {'arguments': '{"target":"current"}', 'name': 'guide'},
+                       'id': 'call_1', 'index': 0, 'type': 'function'}]}}]},
+                  {'choices': [{'delta': {'content': ''}, 'finish_reason': 'tool_calls'}],
+                   'usage': {'prompt_tokens': 89, 'completion_tokens': 27}}]
+        with patch.object(agent, 'sse', return_value=iter(chunks)) as sse:
+            reply = p.complete('s', [{'role': 'user', 'content': 'q'}], [], 10, lambda t: None)
+        self.assertEqual(sse.call_args.args[2], {'Authorization': 'Bearer ya29.t'})
+        self.assertEqual(reply['usage'], {'input_tokens': 89, 'output_tokens': 27})
+        self.assertEqual(reply['content'][0]['extra_content'], signature)
+        back = p.messages('s', [{'role': 'assistant', 'content': reply['content']}])
+        self.assertEqual(back[1]['tool_calls'][0]['extra_content'], signature)
+        cfg = copy.deepcopy(config.DEFAULTS)
+        cfg['agent'].update(provider='gemini', model=None)
+        self.assertIsInstance(agent.AgentBackend(cfg).provider(), agent.GeminiProvider)
+
     def test_agent_backend_needs_a_model(self):
         cfg = copy.deepcopy(config.DEFAULTS)
         self.assertFalse(agent.AgentBackend(cfg).available()[0])

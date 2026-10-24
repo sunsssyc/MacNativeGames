@@ -32,15 +32,18 @@
 
 `agent` 后端是助手自己的智能体循环（`agent.py`，思路来自 pi：一个小核心，模型 + 工具循环 + 几个工具就是一个智能体），不需要 Claude Code 或 Codex，接一个“裸”模型 API 就能按步骤查资料：
 
-- 接入（`agent.provider`）：`anthropic`（Messages API）、`openai`（任何 OpenAI 兼容的 `/chat/completions`：OpenAI、DeepSeek、通义千问、OpenRouter，或本机的 Ollama、LM Studio、llama.cpp；`base_url` 是 localhost 时不需要密钥）、`vertex`。密钥从环境变量 `agent.api_key_env` 或文件 `agent.api_key_file` 读，不写进 assistant.json。
+- 接入（`agent.provider`）：`anthropic`（Messages API）、`openai`（任何 OpenAI 兼容的 `/chat/completions`：OpenAI、DeepSeek、通义千问、OpenRouter，或本机的 Ollama、LM Studio、llama.cpp；`base_url` 是 localhost 时不需要密钥）、`vertex`（Vertex 上的 Claude）、`gemini`（Vertex 上的 Gemini，默认 `gemini-4-argon`，走 Vertex 的 OpenAI 兼容接口，登录方式和 vertex 后端一样；Gemini 函数调用的思考签名会原样带回下一轮）。实测（Gemini 4，2 档，问吉鲁塔古马奇神庙的宝箱）：8.7 秒、2 轮，用了攻略和游戏原名（翼、平台车、通天术），注明三个来源。密钥从环境变量 `agent.api_key_env` 或文件 `agent.api_key_file` 读，不写进 assistant.json。
 - 循环：模型要工具就执行、把结果送回，最多 `agent.max_turns`（默认 10）轮，最后一轮不给工具，保证有回答；回答流式显示在面板上。工具出错（参数不是 JSON、工具不存在、查不到）作为错误结果交回模型，不中断请求。
 - 工具：全部 harness 工具，加上 `plan`（写下 2–4 步要查什么、做完打勾，面板显示“正在规划”）和 `research`（交给一个只能查资料的子智能体：它有自己的上下文，读长攻略和游戏文本，只把要点和来源交回来，主上下文不被攻略原文撑满；它的文字不会显示到面板上）。
 - 不会函数调用的模型：`agent.tool_protocol: "text"`，工具说明写进系统提示，模型写 `<tool>{"name": ..., "arguments": {...}}</tool>`，结果以 `<result>` 送回。模型写在 `<think>` 里的推理不显示。不能看图的模型设 `agent.vision: false`。
 
 ```json
-"agent": {"provider": "openai", "model": "qwen3.8:27b-mlx", "base_url": "http://localhost:11434/v1", "api_key_env": null},
-"backends": ["agent"]
+"vertex": {"credentials": "~/.config/vertex_ai/<服务账号密钥>.json"},
+"agent": {"provider": "gemini", "model": "gemini-4-argon"},
+"backends": ["claude-code", "agent", "codex", "vertex-claude-code", "vertex"]
 ```
+
+本机模型：`"agent": {"provider": "openai", "model": "qwen3.8:27b-mlx", "base_url": "http://localhost:11434/v1", "api_key_env": null}`。
 
 `vertex` 后端现在也走这个循环（`streamRawPredict` 流式）。Vertex 可以用 JSON 凭据文件登录，不依赖 gcloud：`vertex.credentials` 填服务账号密钥或 authorized-user 文件的路径（文件留在原处，不复制）。服务账号用系统自带的 `/usr/bin/openssl` 签名，密钥通过管道传入、不写任何文件；令牌缓存到过期前 5 分钟。项目没写时用凭据里的 `project_id`。`vertex-claude-code` 后端和 Google 朗读也用同一个文件。注意 Vertex 的 Claude 配额按项目计，同一个项目换服务账号不会多出配额。
 

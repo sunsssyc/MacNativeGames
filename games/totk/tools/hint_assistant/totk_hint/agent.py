@@ -3,6 +3,8 @@
 
     providers  anthropic   Anthropic Messages API (api.anthropic.com, or any server speaking it); key from the env
                vertex      Anthropic models on Vertex AI (the vertex backend, vertex.py), gcloud sign-in
+               gemini      Google's Gemini on Vertex AI (default gemini-4-argon) through its OpenAI-compatible endpoint,
+                           signed in like the vertex backend (a credentials file or gcloud)
                openai      any OpenAI-compatible chat completions server: OpenAI, DeepSeek, Qwen, OpenRouter, or a
                            local one (Ollama, LM Studio, llama.cpp, mlx_lm.server) on localhost without a key
     loop       the model answers, or asks for tools; their results go back; up to max_turns rounds, the last one
@@ -262,9 +264,10 @@ class OpenAIProvider:
             blocks = m['content'] if isinstance(m['content'], list) else [{'type': 'text', 'text': m['content']}]
             if m['role'] == 'assistant':
                 text = ''.join(b.get('text', '') for b in blocks if b.get('type') == 'text')
-                calls = [{'id': b['id'], 'type': 'function',
-                          'function': {'name': b['name'], 'arguments': json.dumps(b.get('input') or {}, ensure_ascii=False)}}
-                         for b in blocks if b.get('type') == 'tool_use']
+                calls = [dict({'id': b['id'], 'type': 'function',
+                               'function': {'name': b['name'], 'arguments': json.dumps(b.get('input') or {}, ensure_ascii=False)}},
+                              **({'extra_content': b['extra_content']} if b.get('extra_content') else {}))
+                         for b in blocks if b.get('type') == 'tool_use']   # Gemini's thought signature goes back as it came
                 entry = {'role': 'assistant', 'content': text or None}
                 if calls:
                     entry['tool_calls'] = calls
@@ -302,12 +305,8 @@ class OpenAIProvider:
                 body['tool_choice'] = 'none'
         if self.settings.get('temperature') is not None:
             body['temperature'] = self.settings['temperature']
-        headers = {}
-        key = _key(self.settings)
-        if key:
-            headers['Authorization'] = f'Bearer {key}'
         text, calls, stop, usage, model = '', {}, None, {}, None
-        for e in sse(self.url, body, headers, timeout, check):
+        for e in sse(self.url, body, self.headers(), timeout, check):
             if e.get('error'):
                 raise BackendError(f'the model stopped: {e["error"]}'[:300])
             model = e.get('model') or model
@@ -318,8 +317,9 @@ class OpenAIProvider:
                     text += delta['content']
                     on_text(delta['content'])
                 for call in delta.get('tool_calls') or ():
-                    slot = calls.setdefault(call.get('index', len(calls)), {'id': None, 'name': '', 'arguments': ''})
+                    slot = calls.setdefault(call.get('index', len(calls)), {'id': None, 'name': '', 'arguments': '', 'extra': None})
                     slot['id'] = call.get('id') or slot['id']
+                    slot['extra'] = call.get('extra_content') or slot['extra']
                     function = call.get('function') or {}
                     slot['name'] += function.get('name') or ''
                     slot['arguments'] += function.get('arguments') or ''
@@ -330,10 +330,47 @@ class OpenAIProvider:
                 arguments = json.loads(call['arguments']) if call['arguments'].strip() else {}
             except ValueError:
                 arguments = {'_invalid_json': call['arguments']}
-            content.append({'type': 'tool_use', 'id': call['id'] or f'call_{uuid.uuid4().hex[:12]}', 'name': call['name'],
-                            'input': arguments if isinstance(arguments, dict) else {'_invalid_json': call['arguments']}})
+            block = {'type': 'tool_use', 'id': call['id'] or f'call_{uuid.uuid4().hex[:12]}', 'name': call['name'],
+                     'input': arguments if isinstance(arguments, dict) else {'_invalid_json': call['arguments']}}
+            if call['extra']:
+                block['extra_content'] = call['extra']   # Gemini 3 and later refuse the next round without it
+            content.append(block)
         stop = 'tool_use' if calls else {'stop': 'end_turn', 'length': 'max_tokens'}.get(stop, stop)
         return {'content': content, 'stop': stop, 'usage': usage, 'model': model or self.model}
+
+    def headers(self):
+        key = _key(self.settings)
+        return {'Authorization': f'Bearer {key}'} if key else {}
+
+
+class GeminiProvider(OpenAIProvider):
+    """Gemini on Vertex AI: the OpenAI-compatible chat completions endpoint of the project, with the vertex backend's
+    sign-in. Usage is read as prompt_tokens / completion_tokens."""
+    name = 'gemini'
+
+    def __init__(self, rest, settings):
+        from .vertex import project_and_region
+        settings = dict(settings)
+        model = settings.get('model') or 'gemini-4-argon'
+        settings['model'] = model if '/' in model else f'google/{model}'
+        super().__init__(settings)
+        self.rest = rest
+        project, region = project_and_region(rest.config)
+        region = settings.get('region') or region
+        host = 'aiplatform.googleapis.com' if region == 'global' else f'{region}-aiplatform.googleapis.com'
+        self.url = f'https://{host}/v1/projects/{project}/locations/{region}/endpoints/openapi/chat/completions'
+
+    def available(self):
+        return self.rest.available()
+
+    def headers(self):
+        return {'Authorization': f'Bearer {self.rest.token()}'}
+
+    def complete(self, *args, **kwargs):
+        reply = super().complete(*args, **kwargs)
+        usage = reply['usage']
+        reply['usage'] = {'input_tokens': usage.get('prompt_tokens', 0), 'output_tokens': usage.get('completion_tokens', 0)}
+        return reply
 
 
 def make_provider(settings, config):
@@ -347,7 +384,10 @@ def make_provider(settings, config):
         rest = VertexREST(config)
         rest.settings = dict(rest.settings, **{k: v for k, v in settings.items() if k in ('model', 'effort') and v})
         return VertexProvider(rest)
-    raise BackendError(f'unknown agent.provider {kind} (anthropic, openai or vertex)')
+    if kind == 'gemini':
+        from .vertex import VertexREST
+        return GeminiProvider(VertexREST(config), settings)
+    raise BackendError(f'unknown agent.provider {kind} (anthropic, openai, vertex or gemini)')
 
 
 # text protocol ----------------------------------------------------------------------------------------------------------
@@ -579,7 +619,7 @@ class AgentBackend:
         return make_provider(self.settings, self.config)
 
     def available(self):
-        if not self.settings.get('model') and (self.settings.get('provider') or 'anthropic') != 'vertex':
+        if not self.settings.get('model') and (self.settings.get('provider') or 'anthropic') not in ('vertex', 'gemini'):
             return False, 'no model set (assistant.json agent.model)'
         try:
             return self.provider().available()

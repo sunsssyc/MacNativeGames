@@ -43,8 +43,9 @@ DEFAULTS = {
     'vertex': {'project': None, 'region': 'global', 'model': 'claude-opus-5-5', 'effort': 'low',
                'fallback_model': 'claude-opus-4-8', 'gcloud': None, 'credentials': None},
     # agent: the assistant's own agent loop (agent.py) with a plain model. provider "anthropic" (Messages API),
-    # "openai" (any OpenAI-compatible server; base_url e.g. http://localhost:11434/v1 for Ollama needs no key) or
-    # "vertex". The key comes from the environment variable api_key_env or the file api_key_file, never this file.
+    # "openai" (any OpenAI-compatible server; base_url e.g. http://localhost:11434/v1 for Ollama needs no key),
+    # "vertex" (Anthropic models on Vertex AI) or "gemini" (Gemini on Vertex AI, default gemini-4-argon; vertex.credentials
+    # or gcloud signs in). The key comes from the environment variable api_key_env or the file api_key_file, never this file.
     # tool_protocol "text" for a model without function calling; vision false for one that takes no pictures.
     'agent': {'provider': 'anthropic', 'model': None, 'base_url': None, 'api_key_env': 'ANTHROPIC_API_KEY',
               'api_key_file': None, 'effort': None, 'tool_protocol': 'native', 'vision': True, 'max_turns': 10,
@@ -98,8 +99,8 @@ def load(path=None):
     if isinstance(chars, bool) or not isinstance(chars, int) or chars < 0:
         raise ValueError(f'{path}: voice.google_monthly_chars must be a whole number of characters')
     agent = config['agent']
-    if agent.get('provider') not in ('anthropic', 'openai', 'vertex'):
-        raise ValueError(f'{path}: agent.provider must be anthropic, openai or vertex')
+    if agent.get('provider') not in ('anthropic', 'openai', 'vertex', 'gemini'):
+        raise ValueError(f'{path}: agent.provider must be anthropic, openai, vertex or gemini')
     if agent.get('tool_protocol') not in ('native', 'text'):
         raise ValueError(f'{path}: agent.tool_protocol must be native or text')
     tier = config.get('tier_default')
