@@ -41,6 +41,13 @@ static NSButton *hintVoiceSetup;
 static NSUInteger hintPage;
 static NSArray<NSString *> *hintPages;
 static NSString *hintPagedAnswer;
+// hint_scene.inc: the frame the panel opened on, and 指给我看's marks on it
+static void hintPause(void);
+static void hintResume(void);
+static void hintMarksShow(NSArray *marks);
+static void hintMarksHide(void);
+static NSButton *hintPointButton;
+static BOOL hintSceneReady, hintPointNext;
 /* While the model works: what it is doing (the service's "stage") and the answer written so far ("partial"), typed out at
    a reading pace by hintReveal: the model hands its words over in one burst seconds before the run ends. */
 static NSString *hintStage, *hintPartial;
@@ -182,6 +189,7 @@ static NSFont *hintFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-R
 -(void)history:(id)sender;
 -(void)cancelVoice:(id)sender;
 -(void)actions:(id)sender;
+-(void)point:(id)sender;
 @end
 static TOTKHintActions *hintActions;
 static void hintLayout(CGFloat height){
@@ -214,11 +222,14 @@ static void hintLayout(CGFloat height){
  hintQuestion.hidden=hintSend.hidden=hintWelcome;
  hintQuestion.frame=NSMakeRect(20,62,w-156,34);hintQuestion.font=hintFont(13);
  hintSend.frame=NSMakeRect(w-72,62,52,34);
- hintEnable.frame=NSMakeRect(20,hintWelcome?112:104,hintWelcome?158:150,28);
+ hintEnable.frame=NSMakeRect(20,hintWelcome?112:104,hintWelcome?158:92,28);
+ hintPointButton.frame=NSMakeRect(116,104,70,28);
+ hintPointButton.hidden=hintWelcome||hintWorking||!hintSceneReady||!hintExpanded;
+ hintPointButton.toolTip=@"把这个问题和暂停的画面一起发给露珠，她会在画面上圈出来（只对这个问题有效）";
  hintHistoryButton.hidden=hintWelcome||hintHistory.count==0;
  hintHistoryButton.title=hintHistoryExpanded?@"最新回复":@"历史";
  hintHistoryButton.frame=NSMakeRect(w-124,104,48,28);
- hintActionsButton.frame=NSMakeRect(w-204,104,76,28);
+ hintActionsButton.frame=NSMakeRect(w-190,104,64,28);
  hintActionsButton.hidden=hintWelcome||hintWorking||!hintActionsAllowed();
  hintActionsButton.title=hintActionsArmed?@"✓ 允许操作":@"允许操作";
  ((TOTKHintButton *)hintActionsButton).quiet=!hintActionsArmed;((TOTKHintButton *)hintActionsButton).primary=hintActionsArmed;
@@ -251,8 +262,9 @@ static void hintShow(NSString *text) {
  if(hintDone){[hintScroll.contentView scrollToPoint:NSMakePoint(0,hintText.isFlipped?0:MAX(0,NSHeight(hintText.frame)-hintScroll.contentSize.height))];[hintScroll reflectScrolledClipView:hintScroll.contentView];}
 
 }
+#include "hint_scene.inc"
 static void hintShowWelcome(void){
- hintExpanded=YES;if(runtime_assistant_pause)runtime_assistant_pause(1);hintWelcome=YES;((TOTKHintButton *)hintEnable).primary=YES;
+ hintExpanded=YES;hintPause();hintWelcome=YES;((TOTKHintButton *)hintEnable).primary=YES;
  hintTitle.hidden=hintDisclosure.hidden=hintEnable.hidden=hintBack.hidden=NO;hintProgress.hidden=YES;[hintProgress stopAnimation:nil];
  hintTitle.stringValue=@"露珠";
  hintText.stringValue=@"遇到难题时，先给一点线索。\n需要时，再逐步查看更具体的提示。";
@@ -261,7 +273,7 @@ static void hintShowWelcome(void){
  hintLayout(440);
 }
 static void hintShowReady(void){
- hintExpanded=YES;if(runtime_assistant_pause)runtime_assistant_pause(1);
+ hintExpanded=YES;hintPause();
  hintWorking=hintDone=NO;hintSession=nil;hintPendingQuestion=nil;hintLastQuestion=nil;hintQuestion.stringValue=@"";[hintHistory removeAllObjects];
  hintShow(@"卡在哪里了？告诉我，或先看看进度提示。");
  hintTitle.stringValue=@"露珠";hintEnable.title=@"根据进度给提示";
@@ -279,6 +291,12 @@ static BOOL hintWrite(NSDictionary *value) {
 -(void)history:(id)sender{(void)sender;hintHistoryExpanded=!hintHistoryExpanded;hintText.stringValue=hintHistoryExpanded?[hintHistory componentsJoinedByString:@"\n\n"]:hintDone?hintPageText(hintLatest):hintLatest;hintLayout(0);[hintScroll.contentView scrollToPoint:NSZeroPoint];[hintScroll reflectScrolledClipView:hintScroll.contentView];}
 -(void)voice:(id)sender{(void)sender;if(hintListening)hintVoiceEnd(NO);else hintVoiceBegin();}
 -(void)cancelVoice:(id)sender{(void)sender;hintVoiceEnd(YES);}
+// 指给我看: the typed question (or a plain "what now") with the frame on screen, for marks drawn on it (hint_scene.inc).
+-(void)point:(id)sender{
+ (void)sender;if(hintWorking||!hintSceneReady||hintListening||hintVoiceFinishing)return;
+ NSString *q=[hintQuestion.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+ hintPendingQuestion=q.length?q:@"指给我看：画面里我下一步该做什么？";hintPointNext=YES;[self request:nil];
+}
 -(void)actions:(id)sender{(void)sender;hintActionsArmed=!hintActionsArmed&&hintActionsAllowed();hintLayout(0);
  hintDisclosure.stringValue=hintActionsArmed?@"下一个问题允许露珠操作游戏（最多 6 次短按）· Esc 随时中止":@"可输入问题继续追问";}
 // 朗读 is a switch, remembered in assistant.json: on reads the answer on screen and every answer after it (hint_voice.inc).
@@ -305,7 +323,7 @@ static BOOL hintWrite(NSDictionary *value) {
 }
 -(void)close:(id)sender{
  (void)sender;hintVoiceEnd(YES);hintRecordEnd(NO);if(hintWorking)hintReadStop();else hintReadPanelClosed();hintActionsEnd();hintActionsArmed=NO;if(hintWorking)hintWrite(@{@"id":hintID,@"session":hintSession,@"cancel":@YES});
- hintWorking=NO;hintExpanded=NO;if(runtime_assistant_pause)runtime_assistant_pause(0);[hintPanel orderOut:nil];hintDockLayout();
+ hintWorking=NO;hintExpanded=NO;hintResume();[hintPanel orderOut:nil];hintDockLayout();
 }
 -(void)request:(id)sender{
  (void)sender;if(!hintDone&&!hintPendingQuestion.length&&hintLastQuestion.length)hintPendingQuestion=hintLastQuestion;
@@ -383,6 +401,7 @@ static void hintPoll(void) {
    hintText.toolTip=hintDone?nil:text;
    if(hintDone&&[text isKindOfClass:NSString.class]){[hintHistory addObject:[@"露珠\n" stringByAppendingString:text]];while(hintHistory.count>24)[hintHistory removeObjectAtIndex:0];}
    hintShow(hintDone&&[text isKindOfClass:NSString.class]?text:@"这次没能取得提示。\n你可以稍后重新求助。");
+   if(hintDone)hintMarksShow(answer[@"marks"]);
    if(hintDone&&hintReadOn()&&!hintReadID)hintReadAnswer();   // switched on while it worked
    if(!hintDone&&[hintReadID isEqual:hintID])hintReadStop();
    return;
@@ -425,6 +444,8 @@ void totk_hint_install(NSWindow *window) {
  hintPortrait=[[NSImageView alloc] init];hintPortrait.image=[[NSImage alloc] initWithContentsOfFile:@"runtime/assets/riju-companion.png"];hintPortrait.imageScaling=NSImageScaleProportionallyUpOrDown;[hintPanel.contentView addSubview:hintPortrait];
  hintMic=[TOTKHintButton buttonWithTitle:@"语音提问" target:hintActions action:@selector(voice:)];hintRead=[TOTKHintButton buttonWithTitle:@"朗读" target:hintActions action:@selector(read:)];[hintPanel.contentView addSubview:hintMic];[hintPanel.contentView addSubview:hintRead];
  hintHistoryButton=[TOTKHintButton buttonWithTitle:@"历史" target:hintActions action:@selector(history:)];[hintPanel.contentView addSubview:hintHistoryButton];
+ hintPointButton=[TOTKHintButton buttonWithTitle:@"指给我看" target:hintActions action:@selector(point:)];((TOTKHintButton *)hintPointButton).quiet=YES;
+ hintPointButton.hidden=YES;[hintPanel.contentView addSubview:hintPointButton];
  hintActionsButton=[TOTKHintButton buttonWithTitle:@"允许操作" target:hintActions action:@selector(actions:)];hintActionsButton.hidden=YES;
  hintActionsButton.toolTip=@"只对下一个问题有效：露珠可以替你按几次键（assistant.json 的 allow_actions 打开时才显示）";[hintPanel.contentView addSubview:hintActionsButton];
  for(TOTKHintButton *button in @[hintBack,hintRead,hintEnable,hintHistoryButton])button.quiet=YES;
@@ -452,7 +473,7 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
   if(hintWorking)hintReadStop();else hintReadPanelClosed();   // a request being cancelled is not read on
   hintActionsEnd();hintActionsArmed=NO;
   if(hintWorking)hintWrite(@{@"id":hintID,@"session":hintSession,@"cancel":@YES});
-  hintWorking=NO;hintExpanded=NO;if(runtime_assistant_pause)runtime_assistant_pause(0);[hintPanel orderOut:nil];hintDockLayout();return YES;
+  hintWorking=NO;hintExpanded=NO;hintResume();[hintPanel orderOut:nil];hintDockLayout();return YES;
  }
  NSDictionary *config=hintJSON(hintPath(@"assistant.json"));
  if(![config[@"enabled"] boolValue]){
@@ -470,8 +491,11 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  hintID=NSUUID.UUID.UUIDString;
  NSMutableDictionary *request=[@{@"id":hintID,@"session":hintSession,@"tier":@(hintTier),@"time":@(NSDate.date.timeIntervalSince1970)} mutableCopy];
  if(hintPendingQuestion.length)request[@"question"]=hintPendingQuestion;
- hintActionsGranted=hintPendingQuestion.length&&hintActionsArmed&&[config[@"allow_actions"] boolValue];hintActionsArmed=NO;hintActionCount=0;
+ BOOL pointing=hintPointNext&&hintSceneReady&&hintPendingQuestion.length;hintPointNext=NO;
+ if(pointing)request[@"scene"]=@YES;   // 指给我看: the frame on screen goes with this question only
+ hintActionsGranted=!pointing&&hintPendingQuestion.length&&hintActionsArmed&&[config[@"allow_actions"] boolValue];hintActionsArmed=NO;hintActionCount=0;
  if(hintActionsGranted)request[@"actions"]=@YES;
+ hintMarksHide();
  BOOL reading=hintReadOn();
  if(reading)request[@"read"]=@YES;   // read aloud line by line as it is written; the voice gets ready meanwhile
  if(!hintWrite(request)){

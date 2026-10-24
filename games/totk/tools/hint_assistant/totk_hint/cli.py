@@ -58,6 +58,8 @@ def main(argv=None):
     p.add_argument('--allow-screenshot', action='store_true', help='offer the screenshot tool')
     p.add_argument('--allow-actions', action='store_true', help='offer press_button / stop_action (the game still '
                    'takes presses only for a request the player allowed in the panel)')
+    p.add_argument('--marks', help='offer mark_screen, writing the marks to this file (指给我看)')
+    p.add_argument('--scene-size', help='WIDTHxHEIGHT of the picture mark_screen marks')
     p = sub.add_parser('state', help='print game_state')
     _common(p)
     p.add_argument('--slot', help='slot_00 ... slot_05 (default: the save being played)')

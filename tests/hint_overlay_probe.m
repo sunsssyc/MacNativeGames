@@ -18,6 +18,14 @@ void runtime_assistant_pause(int on){assistantPaused=on;}
 @property NSMutableArray<NSString *> *said;
 @property BOOL talking;
 @end
+// The game's window shot, written at once (a covered window writes none).
+static BOOL shotFails;
+void dm_gfx_window_shot(const char *path){
+ if(shotFails)return;
+ NSBitmapImageRep *rep=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:160 pixelsHigh:90 bitsPerSample:8 samplesPerPixel:4
+  hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+ [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(path) atomically:YES];
+}
 static NSString *silentWav(NSString *folder){   // 0.1 s of 24 kHz 16-bit mono silence
  NSMutableData *d=[NSMutableData data];uint32_t n=4800,riff=36+n,fmt=16,rate=24000,bytes=48000;uint16_t pcm=1,ch=1,align=2,bits=16;
  [d appendBytes:"RIFF" length:4];[d appendBytes:&riff length:4];[d appendBytes:"WAVEfmt " length:8];[d appendBytes:&fmt length:4];
@@ -183,5 +191,31 @@ int main(int argc,const char **argv){@autoreleasepool{
  respond(@{@"status":@"done",@"text":@"第一行\n第二行\n第三行\n第四行"});hintPoll();
  assert(hintDone&&!hintWorking&&!hintRevealTimer);assert(hintPage==1&&[hintText.stringValue isEqual:@"第四行"]);
  [hintActions close:nil];
+ // 指给我看: the panel pauses the game once the frame it opens on is saved, offers pointing, and draws the answer's
+ // marks over the paused window until the game moves again. Without a new frame (a covered window) it pauses anyway.
+ [@"{\"enabled\":true}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ [hintActions close:nil];assert(!assistantPaused);[w orderFront:nil];
+ hintOpen();assert(assistantPaused&&hintSceneReady);assert(hintSceneSaved(hintPath(@"hint-scene.png")));
+ hintWorking=NO;hintDone=YES;hintLayout(0);assert(!hintPointButton.hidden);
+ hintQuestion.stringValue=@"";[hintActions point:nil];
+ NSDictionary *pointing=hintJSON(hintPath(@"hint-request.json"));
+ assert([pointing[@"scene"] boolValue]&&[pointing[@"question"] hasPrefix:@"指给我看"]&&!pointing[@"actions"]);
+ NSArray *marks=@[@{@"kind":@"circle",@"at":@[@0.34,@0.51],@"label":@"发光图案"},@{@"kind":@"arrow",@"at":@[@0.8,@0.9],@"to":@[@0.4,@0.55],@"label":@"往这边走"}];
+ [[NSJSONSerialization dataWithJSONObject:@{@"id":hintID,@"session":hintSession,@"status":@"done",@"text":@"圈出的图案在旗帜右边。",@"marks":marks} options:0 error:nil]
+  writeToFile:hintPath(@"hint-response.json") atomically:YES];
+ hintPoll();assert(hintMarksWindow.visible&&hintMarks.count==2);
+ if(getenv("HINT_PROBE_MARKS")){   // a look at the drawing: the marks over a picture
+  NSView *view=hintMarksWindow.contentView;NSBitmapImageRep *shot=[view bitmapImageRepForCachingDisplayInRect:view.bounds];
+  [NSGraphicsContext saveGraphicsState];[NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:shot]];
+  if(getenv("HINT_PROBE_SCENE"))[[[NSImage alloc] initWithContentsOfFile:@(getenv("HINT_PROBE_SCENE"))] drawInRect:view.bounds];
+  [view drawRect:view.bounds];[NSGraphicsContext restoreGraphicsState];
+  [[shot representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(getenv("HINT_PROBE_MARKS")) atomically:YES];
+ }
+ [hintActions close:nil];assert(!hintMarksWindow.visible&&!hintSceneReady&&!assistantPaused);
+ shotFails=YES;[[NSFileManager defaultManager] removeItemAtPath:hintPath(@"hint-scene.png") error:nil];
+ hintOpen();assert(!assistantPaused);   // waiting for the frame
+ [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.8]];
+ assert(assistantPaused&&!hintSceneReady);hintLayout(0);assert(hintPointButton.hidden);
+ [hintActions close:nil];shotFails=NO;
  [hintTimer invalidate];[hintPanel orderOut:nil];puts("pass: enable preserves config, does not send request, rejects invalid config");
 }}

@@ -101,7 +101,8 @@ class VertexREST:
             raise BackendError(f'Vertex AI request failed: {e}') from None
 
     def run(self, system, prompt, ctx):
-        harness = Harness(self.config, ctx.romfs, ctx.save_root, ctx.allow_screenshot, ctx.allow_actions)
+        harness = Harness(self.config, ctx.romfs, ctx.save_root, ctx.allow_screenshot, ctx.allow_actions, ctx.marks,
+                          ctx.scene_size)
         tools = [{'name': s['name'], 'description': s['description'], 'input_schema': s['inputSchema']}
                  for s in harness.tool_specs()]
         model = self.settings.get('model') or 'claude-opus-5-5'

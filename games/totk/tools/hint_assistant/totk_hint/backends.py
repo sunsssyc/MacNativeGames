@@ -46,15 +46,23 @@ class Context:
         self.allow_screenshot = allow_screenshot
         self.allow_actions = allow_actions
         self.on_event = on_event   # ('tool', tool name) when a tool starts; ('text', answer so far) as it is written
+        self.scene_size = None     # with scene_image: (width, height), and mark_screen is offered (指给我看)
         self.romfs = romfs
         self.save_root = save_root
         self.cancel = cancel   # a threading.Event, or None
         self.timeout = timeout or config.get('timeout_seconds') or 120
         self.workdir = tablemod.CACHE_ROOT / 'runs' / uuid.uuid4().hex[:12]
 
+    @property
+    def marks(self):
+        """Where mark_screen writes this run's marks, when it is offered."""
+        return self.workdir / 'marks.json' if self.scene_size else None
+
     def mcp_command(self):
         """The command that starts the totk-harness MCP server for this run."""
         args = ['-E', '-s', str(RUN_PY), 'mcp']
+        if self.marks:
+            args += ['--marks', str(self.marks), '--scene-size', '%dx%d' % self.scene_size]
         if self.allow_screenshot:
             args.append('--allow-screenshot')
         if self.allow_actions:
@@ -206,7 +214,8 @@ class ClaudeCode:
         mcp = {'mcpServers': {'totk-harness': {'type': 'stdio', 'command': python, 'args': args}}}
         mcp_file = ctx.workdir / 'mcp.json'
         mcp_file.write_text(json.dumps(mcp, ensure_ascii=False))
-        tools = [f'mcp__totk-harness__{t}' for t in TOOLS + (ACTION_TOOLS if ctx.allow_actions else ())]
+        tools = [f'mcp__totk-harness__{t}' for t in TOOLS + (ACTION_TOOLS if ctx.allow_actions else ())
+                 + (('mark_screen',) if ctx.marks else ())]
         builtin = ''
         # stream-json with partial messages: the answer is shown as it is written, tool calls as they start
         command = [binary, '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',

@@ -14,7 +14,7 @@ INSTRUCTIONS = ('The player\'s Tears of the Kingdom game: the newest save and th
                 'the live game), live runtime state, place and item names (Simplified Chinese). Call only the tools a '
                 'question needs; search_text checks names and facts. Game inputs (press_button) are offered only when '
                 'the player allowed this request to act.')
-WRITES = ('screenshot', 'press_button', 'stop_action')   # not read-only: they reach into the running game
+WRITES = ('screenshot', 'press_button', 'stop_action', 'mark_screen')   # not read-only: they reach into the game
 
 
 def _error(id_, code, message):
@@ -97,7 +97,8 @@ class Server:
 
 
 def main(args):
+    scene_size = tuple(int(v) for v in args.scene_size.split('x')) if args.scene_size else None
     harness = Harness(romfs=args.romfs, save_root=args.save_root, allow_screenshot=args.allow_screenshot,
-                      allow_actions=args.allow_actions, config=args.config_data)
+                      allow_actions=args.allow_actions, marks=args.marks, scene_size=scene_size, config=args.config_data)
     Server(harness).run()
     return 0

@@ -42,6 +42,7 @@ static void hintRuntimePoll(void){
  if(runtimeHeld>=0){hintRuntimeReply(id,@"action_busy");return;}
  hintActionCount++;
  runtimeRestorePause=hintExpanded;if(runtimeRestorePause&&runtime_assistant_pause)runtime_assistant_pause(0);
+ hintSceneReady=NO;hintMarksHide();   // the game moves: the frame on screen is no longer the saved one
  runtimeHeld=code.integerValue;NSUInteger generation=++runtimeActionGeneration;
  runtime_input_key_synthetic((unsigned)runtimeHeld,1);
  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(ms*NSEC_PER_MSEC)),dispatch_get_main_queue(),^{

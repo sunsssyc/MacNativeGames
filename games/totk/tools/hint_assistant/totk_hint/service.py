@@ -4,11 +4,14 @@ The game (runtime/hint_overlay.m, key 8) writes hint-request.json next to its ot
     {"id": 7, "session": 6, "tier": 0, "time": 1792737015}       tier 0: assistant.json tier_default
     {"id": 7, "session": 6, "question": "...", "actions": true}   a question the player allowed to press buttons
     {"id": 7, "session": 6, "read": true}                         read the answer aloud as it is written (voice.py)
+    {"id": 7, "session": 6, "scene": true}                        指给我看: the frame the panel opened on, marks on it
     {"id": 7, "session": 6, "cancel": true}                       Esc while the hint is being worked out
 and shows hint-response.json:
     {"id": 7, "session": 6, "tier": 1, "status": "working"|"done"|"error"|"cancelled", "text": "...",
      "backend": "claude-code", "seconds": 12.3, "next_tier": 2, "limit": 150}
 "limit" is the request's time budget in seconds (total_timeout_seconds); the game stops waiting a little after it.
+A 指给我看 answer has "marks": [{"kind": "circle"|"arrow", "at": [x, y], "to": [x, y], "label": "..."}], fractions of
+the picture (scene.py), for the game to draw on its paused window.
 While working, "stage" says what the model is doing ("正在看任务日志") and "partial" is the answer written so far.
 A session is one stuck moment: its later tiers see the earlier answers and go one step further."""
 import fcntl
@@ -21,6 +24,7 @@ from pathlib import Path
 
 from . import backends as backendmod
 from . import config as configmod
+from . import scene as scenemod
 from . import voice as voicemod
 from .harness import Harness
 from .prompts import SYSTEM, TIER_NAMES, clean, user_prompt
@@ -33,15 +37,18 @@ MAX_SESSIONS = 8
 MAX_QUESTION_CHARS = 2000
 STAGES = {'game_state': '正在看存档', 'quest_log': '正在看任务日志', 'search_text': '正在查游戏文本',
           'screenshot': '正在看画面', 'runtime_state': '正在看林克的位置', 'wait_state': '正在看林克的位置',
-          'press_button': '正在操作游戏', 'stop_action': '正在松开按键'}
+          'press_button': '正在操作游戏', 'stop_action': '正在松开按键', 'mark_screen': '正在圈画面',
+          'Read': '正在看画面'}   # Read: Claude Code opening the attached picture
 
 
 def hint(config, tier=None, backend='auto', question=None, previous=None, allow_screenshot=None, romfs=None,
-         save_root=None, cancel=None, progress=None, scene_image=None, allow_actions=False, on_event=None):
+         save_root=None, cancel=None, progress=None, scene_image=None, allow_actions=False, on_event=None,
+         scene_size=None):
     """{"text", "tier", "backend", "model", "seconds", "attempts"}; raises BackendError when no backend answers.
     Each backend gets timeout_seconds, all of them together total_timeout_seconds. allow_actions offers the input tools
     (the caller checks assistant.json allow_actions and the player's consent for this request). on_event gets the
-    backend's progress: ('tool', name) and ('text', the answer so far)."""
+    backend's progress: ('tool', name) and ('text', the answer so far). scene_size (the picture's width, height) with
+    scene_image offers mark_screen, and its marks come back in "marks"."""
     if cancel is not None and cancel.is_set():
         raise backendmod.Cancelled()
     tier = tier if tier in (1, 2, 3) else config['tier_default']
@@ -51,7 +58,13 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
     deadline = t0 + config['total_timeout_seconds']
     # Nothing is read ahead (prefetch_state is a legacy key): the model picks its observations through the tools.
     prompt = user_prompt(tier, question, previous, shots, allow_actions)
-    prompt += '\n本次当前画面：' + ('已附带游戏窗口截图。先看画面，再回答；存档只作为历史背景。' if scene_image else '不可用。不能假装看到了当前场景，不能把存档当作实时状态。')
+    if scene_image and scene_size:
+        prompt += (f'\n本次当前画面：已附带面板打开时的游戏画面（游戏在面板后暂停，窗口里就是这一帧），'
+                   f'{scene_size[0]}×{scene_size[1]} 像素。先看画面，再回答；存档只作为历史背景。'
+                   '\n玩家点了“指给我看”：用 mark_screen 在这张图上圈出 1–3 个关键位置（坐标用这张图的像素），'
+                   '回答里用“圈出的……”指代。画面里看不到相关的东西就不要圈，直接说明。')
+    else:
+        prompt += '\n本次当前画面：' + ('已附带游戏窗口截图。先看画面，再回答；存档只作为历史背景。' if scene_image else '不可用。不能假装看到了当前场景，不能把存档当作实时状态。')
     attempts = []
     for name in backendmod.order(backend, config):
         if cancel is not None and cancel.is_set():
@@ -70,6 +83,7 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
         ctx = backendmod.Context(config, shots, romfs, save_root, cancel, min(config['timeout_seconds'], remaining),
                                  allow_actions, on_event)
         ctx.scene_image = scene_image
+        ctx.scene_size = tuple(scene_size) if scene_image and scene_size else None
         try:
             answer = b.run(SYSTEM, prompt, ctx)
         except backendmod.BackendError as e:
@@ -79,7 +93,8 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
         if not text:
             attempts.append(f'{name}: empty answer')
             continue
-        return {'text': text, 'tier': tier, 'backend': name, 'model': answer.get('model'),
+        marks = scenemod.read_marks(ctx.marks) if ctx.marks else None
+        return {'text': text, 'tier': tier, 'backend': name, 'model': answer.get('model'), 'marks': marks,
                 'seconds': round(time.monotonic() - t0, 1), 'attempts': attempts, 'raw': answer['text'],
                 'turns': answer.get('turns'), 'cost_usd': answer.get('cost_usd')}
     raise backendmod.BackendError('没有可用的模型后端：' + '；'.join(attempts) if attempts else '没有配置模型后端')
@@ -181,16 +196,20 @@ class Service:
             if reading:
                 self.voice.feed(request['id'], shown['partial'])
         t0 = time.monotonic()
-        scene_image = None
+        scene_image, scene_size = None, None
         candidate = request.get('scene_image')
-        if self.config.get('observe_current_scene') and candidate == str(self.folder / 'hint-scene.png'):
+        if request.get('scene') is True:   # 指给我看, this question only: the frame the panel opened on
+            prepared = scenemod.prepare(self.folder)
+            if prepared:
+                scene_image, scene_size = prepared[0], prepared[1:]
+        elif self.config.get('observe_current_scene') and candidate == str(self.folder / 'hint-scene.png'):
             path = Path(candidate)
             if path.is_file() and 0 <= time.time() - path.stat().st_mtime <= 15:
                 scene_image = path
         try:
             result = hint(self.config, tier, request.get('backend') or 'auto', question or None, previous,
                           request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image,
-                          allow_actions=actions, on_event=event)
+                          allow_actions=actions, on_event=event, scene_size=scene_size)
         except backendmod.Cancelled:
             finish()
             self.voice.stop(str(request['id']))
@@ -223,7 +242,7 @@ class Service:
                  + (f' (skipped: {"; ".join(result["attempts"])})' if result['attempts'] else ''))
         self.respond(request, 'done', tier=tier, text=result['text'], backend=result['backend'],
                      seconds=result['seconds'], next_tier=tier + 1 if tier < 3 else None,
-                     tier_name=TIER_NAMES[tier])
+                     tier_name=TIER_NAMES[tier], marks=result.get('marks'))
 
     def handle(self, request):
         if not isinstance(request.get('id'), (str, int)) or not isinstance(request.get('session', request['id']), (str, int)):

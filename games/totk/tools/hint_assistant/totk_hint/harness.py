@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .live import BUTTONS
 from . import save as savemod
+from . import scene as scenemod
 from . import tables as tablemod
 from .romfs import DATA_DIR
 
@@ -115,12 +116,14 @@ def _quarter(v):
 
 
 class Harness:
-    def __init__(self, config=None, romfs=None, save_root=None, allow_screenshot=False, allow_actions=False):
+    def __init__(self, config=None, romfs=None, save_root=None, allow_screenshot=False, allow_actions=False,
+                 marks=None, scene_size=None):
         self.config = config or {}
         self.romfs = romfs
         self.roots = savemod.save_roots(save_root, self.config)
         self.allow_screenshot = allow_screenshot
         self.allow_actions = allow_actions   # press_button / stop_action: the player allowed this request to act
+        self.marks, self.scene_size = marks, scene_size   # mark_screen: where to write, on a picture this size (指给我看)
         self._tables = None
         self._places = None
 
@@ -395,6 +398,18 @@ class Harness:
             raise ToolError('玩家没有允许这次提示截图（assistant.json 的 allow_screenshot，或请求里的 screenshot）')
         if not self.game_pid():
             raise ToolError('游戏没有在运行，无法截图')
+        # Behind the open panel the game is paused and draws no new frame to capture: the frame the panel opened on is
+        # what the window shows.
+        try:
+            from .live import call
+            paused = call('state').get('state', {}).get('assistant_paused')
+        except (ValueError, TimeoutError, OSError, AttributeError):
+            paused = False
+        prepared = scenemod.prepare(DATA_DIR) if paused else None
+        if prepared:
+            jpg, width, height = prepared
+            return {'path': str(jpg), 'width': width, 'height': height,
+                    'note': '面板打开时的画面（游戏在面板后暂停，窗口里就是这一帧）'}, jpg
         SHOTS.mkdir(parents=True, exist_ok=True)
         png = SHOTS / f'hint-{int(time.time() * 1000)}.png'
         if any(c in str(png) for c in '\r\n\0'):
@@ -424,7 +439,8 @@ class Harness:
         image = jpeg if made.returncode == 0 and jpeg.is_file() else png
         for old in sorted(SHOTS.glob('hint-*'), key=lambda p: p.stat().st_mtime)[:-8]:   # keep the last few
             old.unlink(missing_ok=True)
-        return {'path': str(image), 'note': '当前游戏画面（含窗口上的提示框）'}, image
+        width, height = scenemod.size(image) or (None, None)
+        return {'path': str(image), 'width': width, 'height': height, 'note': '当前游戏画面（含窗口上的提示框）'}, image
 
     # dispatch ---------------------------------------------------------------------------------------------------------
     def tool_specs(self):
@@ -480,6 +496,8 @@ class Harness:
                  'limit': {'type': 'integer', 'description': 'at most this many lines (default 10, max 30)'}},
                  'required': ['query'], 'additionalProperties': False}},
         ]
+        if self.marks and self.scene_size:
+            specs.append(scenemod.TOOL)
         if self.allow_screenshot:
             specs.append({'name': 'screenshot',
                           'description': 'Capture the game window now (the player allowed it for this hint). Returns the '
@@ -509,6 +527,13 @@ class Harness:
             result, image = self.search_text(args.get('query'), args.get('limit') or 10), None
         elif name == 'screenshot':
             result, image = self.screenshot()
+        elif name == 'mark_screen':
+            if not (self.marks and self.scene_size):
+                raise ToolError('玩家没有点“指给我看”，这次不能在画面上标注')
+            try:
+                result, image = scenemod.mark(args, *self.scene_size, self.marks), None
+            except ValueError as e:
+                raise ToolError(str(e)) from None
         else:
             raise ToolError(f'unknown tool {name}')
         return json.dumps(result, ensure_ascii=False), image
