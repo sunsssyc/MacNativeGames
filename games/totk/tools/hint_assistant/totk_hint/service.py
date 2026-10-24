@@ -2,10 +2,12 @@
 
 The game (runtime/hint_overlay.m, key 8) writes hint-request.json next to its other files:
     {"id": 7, "session": 6, "tier": 0, "time": 1792737015}       tier 0: assistant.json tier_default
+    {"id": 7, "session": 6, "question": "...", "actions": true}   a question the player allowed to press buttons
     {"id": 7, "session": 6, "cancel": true}                       Esc while the hint is being worked out
 and shows hint-response.json:
     {"id": 7, "session": 6, "tier": 1, "status": "working"|"done"|"error"|"cancelled", "text": "...",
-     "backend": "claude-code", "seconds": 12.3, "next_tier": 2}
+     "backend": "claude-code", "seconds": 12.3, "next_tier": 2, "limit": 150}
+"limit" is the request's time budget in seconds (total_timeout_seconds); the game stops waiting a little after it.
 A session is one stuck moment: its later tiers see the earlier answers and go one step further."""
 import fcntl
 import json
@@ -17,7 +19,8 @@ from pathlib import Path
 
 from . import backends as backendmod
 from . import config as configmod
-from .harness import Harness, compact_snapshot
+from . import voice as voicemod
+from .harness import Harness
 from .prompts import SYSTEM, TIER_NAMES, clean, user_prompt
 from .romfs import DATA_DIR
 
@@ -29,22 +32,28 @@ MAX_QUESTION_CHARS = 2000
 
 
 def hint(config, tier=None, backend='auto', question=None, previous=None, allow_screenshot=None, romfs=None,
-         save_root=None, cancel=None, progress=None, scene_image=None, scene_status=None, runtime_snapshot=None):
-    """{"text", "tier", "backend", "model", "seconds", "attempts"}; raises BackendError when no backend answers."""
+         save_root=None, cancel=None, progress=None, scene_image=None, allow_actions=False):
+    """{"text", "tier", "backend", "model", "seconds", "attempts"}; raises BackendError when no backend answers.
+    Each backend gets timeout_seconds, all of them together total_timeout_seconds. allow_actions offers the input tools
+    (the caller checks assistant.json allow_actions and the player's consent for this request)."""
     if cancel is not None and cancel.is_set():
         raise backendmod.Cancelled()
     tier = tier if tier in (1, 2, 3) else config['tier_default']
     shots = config.get('allow_screenshot') if allow_screenshot is None else allow_screenshot
     shots = bool(shots) and bool(Harness.game_pid())   # a screenshot needs the running game
     t0 = time.monotonic()
-    snapshot = None
-    # Legacy prefetch settings are ignored: observations are selected through tools.
-    prompt = user_prompt(tier, snapshot, question, previous, shots)
+    deadline = t0 + config['total_timeout_seconds']
+    # Nothing is read ahead (prefetch_state is a legacy key): the model picks its observations through the tools.
+    prompt = user_prompt(tier, question, previous, shots, allow_actions)
     prompt += '\n本次当前画面：' + ('已附带游戏窗口截图。先看画面，再回答；存档只作为历史背景。' if scene_image else '不可用。不能假装看到了当前场景，不能把存档当作实时状态。')
     attempts = []
     for name in backendmod.order(backend, config):
         if cancel is not None and cancel.is_set():
             raise backendmod.Cancelled()
+        remaining = deadline - time.monotonic()
+        if remaining < 5:
+            attempts.append(f'{name}: no time left of {config["total_timeout_seconds"]} s')
+            break
         b = backendmod.make(name, config)
         ok, why = b.available()
         if not ok:
@@ -52,7 +61,8 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
             continue
         if progress:
             progress(name)
-        ctx = backendmod.Context(config, shots, romfs, save_root, cancel)
+        ctx = backendmod.Context(config, shots, romfs, save_root, cancel, min(config['timeout_seconds'], remaining),
+                                 allow_actions)
         ctx.scene_image = scene_image
         try:
             answer = b.run(SYSTEM, prompt, ctx)
@@ -95,6 +105,7 @@ class Service:
         self.sessions = {}   # session id -> bounded completed question/answer turns
         self.current = None  # (request id, cancel event, thread)
         self.lock = threading.Lock()
+        self.voice = voicemod.VoiceService(self.folder, config, log)
 
     def respond(self, request, status, **fields):
         value = {'id': request.get('id'), 'session': request.get('session'), 'status': status, 'time': time.time()}
@@ -114,11 +125,15 @@ class Service:
         # Typed follow-ups retain the conversation, including replies at the same tier.
         # The original tier buttons still reveal only earlier, less detailed hints.
         previous = history if question else [(p['tier'], p['answer']) for p in history if p['tier'] < tier]
-        self.respond(request, 'working', tier=tier, text='正在查看存档和任务日志……', next_tier=None)
+        # Input tools only when assistant.json allows them and the player allowed this question in the panel.
+        actions = bool(self.config.get('allow_actions')) and request.get('actions') is True and bool(question)
+        limit = self.config['total_timeout_seconds']
+        self.respond(request, 'working', tier=tier, text='正在思考……', next_tier=None, limit=limit)
 
         def progress(name):
             title = backendmod.make(name, self.config).title
-            self.respond(request, 'working', tier=tier, backend=name, text=f'正在思考（{title}）……', next_tier=None)
+            self.respond(request, 'working', tier=tier, backend=name, text=f'正在思考（{title}）……', next_tier=None,
+                         limit=limit)
         t0 = time.monotonic()
         scene_image = None
         candidate = request.get('scene_image')
@@ -128,7 +143,8 @@ class Service:
                 scene_image = path
         try:
             result = hint(self.config, tier, request.get('backend') or 'auto', question or None, previous,
-                          request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image, scene_status=request.get("scene_status"))
+                          request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image,
+                          allow_actions=actions)
         except backendmod.Cancelled:
             self.log(f'[hint] request {request.get("id")} cancelled')
             self.respond(request, 'cancelled', tier=tier, text='', next_tier=None)
@@ -190,34 +206,50 @@ class Service:
                 pass
             if accept_pending:
                 seen, stamp = None, None
+            voice_path = self.folder / voicemod.REQUEST
+            try:   # 朗读 requests are never pending across a restart: the panel asks again
+                voice_stamp = voice_path.stat().st_mtime_ns
+            except OSError:
+                voice_stamp = None
             self.log(f'[hint] service ready (requests: {path}; parent pid {parent_pid or "-"})')
             last_check = 0
-            while True:
-                now = time.monotonic()
-                if parent_pid and now - last_check > 2:
-                    last_check = now
-                    if not _alive(parent_pid):
-                        self.log('[hint] the game has exited; the hint service stops')
-                        if self.current:
-                            self.current[1].set()
-                            self.current[2].join(timeout=8)  # let the worker reap its backend process group
-                        return 0
-                try:
-                    mtime = path.stat().st_mtime_ns
-                except OSError:
-                    mtime = None
-                if mtime and mtime != stamp:
-                    stamp = mtime
-                    try:
-                        request = json.loads(path.read_text(encoding='utf-8'))
-                    except (OSError, ValueError):
-                        request = None   # written half-way: the next poll sees the whole file
-                        stamp = None
+            try:
+                while True:
+                    now = time.monotonic()
+                    if parent_pid and now - last_check > 2:
+                        last_check = now
+                        if not _alive(parent_pid):
+                            self.log('[hint] the game has exited; the hint service stops')
+                            if self.current:
+                                self.current[1].set()
+                                self.current[2].join(timeout=8)  # let the worker reap its backend process group
+                            return 0
+                    request, stamp = self._changed(path, stamp)
                     if isinstance(request, dict) and (request.get('id') != seen or request.get('cancel')):
                         seen = request.get('id')
                         self.log(f'[hint] request {json.dumps(request, ensure_ascii=False)}')
                         self.handle(request)
-                time.sleep(poll)
+                    request, voice_stamp = self._changed(voice_path, voice_stamp)
+                    if isinstance(request, dict):
+                        self.voice.handle(request)
+                    self.voice.poll()
+                    time.sleep(poll)
+            finally:
+                self.voice.close()
+
+    @staticmethod
+    def _changed(path, stamp):
+        """(the request in path if it changed since stamp, else None; the new stamp)."""
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            return None, stamp
+        if mtime == stamp:
+            return None, stamp
+        try:
+            return json.loads(path.read_text(encoding='utf-8')), mtime
+        except (OSError, ValueError):
+            return None, None   # written half-way: the next poll sees the whole file
 
 
 def serve(args):

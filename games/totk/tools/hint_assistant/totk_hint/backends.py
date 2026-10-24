@@ -20,7 +20,8 @@ from pathlib import Path
 from . import tables as tablemod
 
 RUN_PY = Path(__file__).resolve().parents[1] / 'run.py'
-TOOLS = ('wait_state', 'runtime_state', 'press_button', 'stop_action', 'game_state', 'quest_log', 'search_text')
+TOOLS = ('wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text')
+ACTION_TOOLS = ('press_button', 'stop_action')   # only for a request the player allowed to act (Context.allow_actions)
 CODEX_FEATURES_OFF = ('apps', 'browser_use', 'browser_use_external', 'computer_use', 'image_generation', 'in_app_browser',
                       'plugins', 'remote_plugin', 'hooks', 'goals', 'memories')
 
@@ -36,10 +37,12 @@ class Cancelled(Exception):
 class Context:
     """What one hint run needs besides the prompt."""
 
-    def __init__(self, config, allow_screenshot=False, romfs=None, save_root=None, cancel=None, timeout=None):
+    def __init__(self, config, allow_screenshot=False, romfs=None, save_root=None, cancel=None, timeout=None,
+                 allow_actions=False):
         self.config = config
         self.scene_image = None
         self.allow_screenshot = allow_screenshot
+        self.allow_actions = allow_actions
         self.romfs = romfs
         self.save_root = save_root
         self.cancel = cancel   # a threading.Event, or None
@@ -51,6 +54,8 @@ class Context:
         args = ['-E', '-s', str(RUN_PY), 'mcp']
         if self.allow_screenshot:
             args.append('--allow-screenshot')
+        if self.allow_actions:
+            args.append('--allow-actions')
         if self.romfs:
             args += ['--romfs', str(self.romfs)]
         if self.save_root:
@@ -158,7 +163,7 @@ class ClaudeCode:
         mcp = {'mcpServers': {'totk-harness': {'type': 'stdio', 'command': python, 'args': args}}}
         mcp_file = ctx.workdir / 'mcp.json'
         mcp_file.write_text(json.dumps(mcp, ensure_ascii=False))
-        tools = [f'mcp__totk-harness__{t}' for t in TOOLS]
+        tools = [f'mcp__totk-harness__{t}' for t in TOOLS + (ACTION_TOOLS if ctx.allow_actions else ())]
         builtin = ''
         command = [binary, '-p', '--output-format', 'json', '--system-prompt', system, '--mcp-config', str(mcp_file),
                    '--strict-mcp-config', '--permission-mode', 'dontAsk', '--no-session-persistence',
@@ -204,17 +209,21 @@ class Codex:
     name = 'codex'
     title = 'Codex'
     _features = {}
+    _checked = {}   # (path, mtime) -> starts: the service asks every request, a codex --version takes a second or more
 
     def __init__(self, config):
         self.config = config
         self.settings = config.get('codex') or {}
 
     def _works(self, path):
-        try:
-            r = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=20, env=tool_env(path))
-            return r.returncode == 0 and 'codex' in (r.stdout + r.stderr).lower()
-        except (OSError, subprocess.TimeoutExpired):
-            return False
+        key = (path, os.stat(path).st_mtime_ns)
+        if key not in self._checked:
+            try:
+                r = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=20, env=tool_env(path))
+                self._checked[key] = r.returncode == 0 and 'codex' in (r.stdout + r.stderr).lower()
+            except (OSError, subprocess.TimeoutExpired):
+                return False   # not remembered: a slow first start is no reason to skip codex for the whole session
+        return self._checked[key]
 
     def binary(self):
         """A codex that actually starts: an npm install can lack its native binary, so each candidate is tried."""

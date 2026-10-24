@@ -10,9 +10,11 @@ import time
 from . import __version__
 from .harness import Harness, ToolError, image_block
 
-INSTRUCTIONS = ('Read-only view of the player\'s Tears of the Kingdom game: the newest save, the game\'s own quest log, '
-                'place and item names (Simplified Chinese). Use game_state and quest_log before giving a hint, '
-                'search_text to check names and facts.')
+INSTRUCTIONS = ('The player\'s Tears of the Kingdom game: the newest save and the game\'s own quest log (history, not '
+                'the live game), live runtime state, place and item names (Simplified Chinese). Call only the tools a '
+                'question needs; search_text checks names and facts. Game inputs (press_button) are offered only when '
+                'the player allowed this request to act.')
+WRITES = ('screenshot', 'press_button', 'stop_action')   # not read-only: they reach into the running game
 
 
 def _error(id_, code, message):
@@ -47,7 +49,7 @@ class Server:
         if method == 'ping':
             return _result(id_, {})
         if method == 'tools/list':
-            tools = [dict(spec, annotations={'readOnlyHint': spec['name'] != 'screenshot', 'openWorldHint': False})
+            tools = [dict(spec, annotations={'readOnlyHint': spec['name'] not in WRITES, 'openWorldHint': False})
                      for spec in self.harness.tool_specs()]
             return _result(id_, {'tools': tools})
         if method in ('resources/list', 'prompts/list', 'resources/templates/list'):
@@ -96,6 +98,6 @@ class Server:
 
 def main(args):
     harness = Harness(romfs=args.romfs, save_root=args.save_root, allow_screenshot=args.allow_screenshot,
-                      config=args.config_data)
+                      allow_actions=args.allow_actions, config=args.config_data)
     Server(harness).run()
     return 0

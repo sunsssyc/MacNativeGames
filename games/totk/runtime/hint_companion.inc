@@ -9,15 +9,24 @@ static NSString *hintTranscript;
 static void hintDockLayout(void){
  if(!hintDock)return;
  NSRect r=[hintGame convertRectToScreen:hintGame.contentView.bounds];
+ NSFont *font=hintFont(13);
  NSMutableParagraphStyle *paragraph=[NSMutableParagraphStyle new];paragraph.lineSpacing=3;paragraph.lineBreakMode=NSLineBreakByWordWrapping;
- NSDictionary *style=@{NSFontAttributeName:hintFont(13),NSForegroundColorAttributeName:hintInk(),NSParagraphStyleAttributeName:paragraph};
- CGFloat textWidth=MIN(232,MAX(144,[hintBubble.stringValue sizeWithAttributes:style].width));
- NSRect measured=[hintBubble.stringValue boundingRectWithSize:NSMakeSize(textWidth,CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin|NSStringDrawingUsesFontLeading attributes:style];
- CGFloat textHeight=MIN(80,MAX(36,ceil(NSHeight(measured))+2));
+ NSDictionary *style=@{NSFontAttributeName:font,NSForegroundColorAttributeName:hintInk(),NSParagraphStyleAttributeName:paragraph};
+ /* Up to six lines, the answer's own limit (prompts.py MAX_LINES), measured by the cell that draws them: the fixed 80 pt
+    held three lines of PingFang 13 with the 3 pt spacing and dropped the fourth without a mark (user, 2026-10-24), and a
+    string measurement comes out shorter than the cell's own lines. Longer text ends in "…" on the last line (the cell
+    truncates it); the whole answer is in the panel. */
+ CGFloat textWidth=MIN(260,MAX(144,[hintBubble.stringValue sizeWithAttributes:style].width));
+ NSString *text=hintBubble.stringValue;
+ hintBubble.attributedStringValue=[[NSAttributedString alloc] initWithString:@"一\n一\n一\n一\n一\n一" attributes:style];
+ CGFloat sixLines=ceil([hintBubble.cell cellSizeForBounds:NSMakeRect(0,0,textWidth,CGFLOAT_MAX)].height);
+ hintBubble.attributedStringValue=[[NSAttributedString alloc] initWithString:text attributes:style];
+ CGFloat need=ceil([hintBubble.cell cellSizeForBounds:NSMakeRect(0,0,textWidth,CGFLOAT_MAX)].height);
+ CGFloat textHeight=MIN(sixLines,MAX(36,need));
  CGFloat bubbleWidth=textWidth+36,bubbleHeight=textHeight+24;
  CGFloat height=MAX(96,bubbleHeight+8),width=bubbleWidth+78;
  hintBubbleSurface.frame=NSMakeRect(0,(height-bubbleHeight)/2,bubbleWidth,bubbleHeight);
- hintBubble.frame=NSMakeRect(14,12,textWidth,textHeight);hintBubble.attributedStringValue=[[NSAttributedString alloc] initWithString:hintBubble.stringValue attributes:style];
+ hintBubble.frame=NSMakeRect(14,12,textWidth,textHeight);
  hintAvatar.frame=NSMakeRect(width-72,(height-92)/2,72,92);
  NSRect frame=NSMakeRect(NSMaxX(r)-width-24,NSMinY(r)+MAX(156,NSHeight(r)*0.29),width,height);
  if(!NSEqualRects(frame,hintDock.frame))[hintDock setFrame:frame display:YES];
@@ -41,7 +50,7 @@ static void hintVoiceControls(BOOL active){
  hintMic.title=hintListening?@"停止":@"语音";
  hintSend.enabled=!active&&hintQuestion.stringValue.length>0;
  hintEnable.hidden=active||hintWorking;hintHistoryButton.hidden=active||!hintHistory.count;
- hintRead.hidden=active||!hintDone;hintVoiceCancel.hidden=!active;
+ hintRead.hidden=active;hintVoiceCancel.hidden=!active;
  hintVoiceCancel.frame=NSMakeRect(20,104,92,28);
 }
 static void hintVoiceSubmit(NSUInteger generation){

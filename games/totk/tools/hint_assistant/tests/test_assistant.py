@@ -43,21 +43,20 @@ class AssistantTests(unittest.TestCase):
         backend = Mock()
         backend.available.return_value = (True, '')
         backend.run.return_value = {'text': '你好'}
-        with patch.object(service, 'compact_snapshot') as snapshot, patch.object(backends, 'make', return_value=backend):
-            service.hint(cfg, question='你好', allow_screenshot=False,
-                         runtime_snapshot={'secret_marker': 'unsolicited_runtime'})
-        snapshot.assert_not_called()
+        with patch.object(harness.Harness, 'game_state') as state, patch.object(harness.Harness, 'quest_log') as quests, \
+             patch.object(backends, 'make', return_value=backend):
+            service.hint(cfg, question='你好', allow_screenshot=False)
+        state.assert_not_called(); quests.assert_not_called()
         prompt = backend.run.call_args.args[1]
-        self.assertNotIn('unsolicited_runtime', prompt)
         self.assertNotIn('请先调用 game_state', prompt)
         self.assertIn('按本次问题决定', prompt)
 
     def test_cancel_does_not_read_save_or_launch_backend(self):
         cancel = threading.Event(); cancel.set()
-        with patch.object(service, 'compact_snapshot') as snapshot, patch.object(backends, 'make') as make:
+        with patch.object(harness.Harness, 'game_state') as state, patch.object(backends, 'make') as make:
             with self.assertRaises(backends.Cancelled):
                 service.hint(config.DEFAULTS, cancel=cancel)
-            snapshot.assert_not_called(); make.assert_not_called()
+            state.assert_not_called(); make.assert_not_called()
         ctx = backends.Context(self.config, cancel=cancel)
         with patch.object(backends.subprocess, 'Popen') as popen:
             with self.assertRaises(backends.Cancelled):
@@ -113,9 +112,9 @@ class AssistantTests(unittest.TestCase):
                 self.assertEqual(len(server.sessions), service.MAX_SESSIONS)
                 self.assertNotIn('same', server.sessions)
 
-    def test_snapshot_is_not_current_environment(self):
-        prompt = prompts.user_prompt(1, {'player': {'hearts_now': 3.5}}, '你好')
-        self.assertIn('不是当前状态', prompt)
+    def test_save_is_not_current_environment(self):
+        self.assertIn('绝不是实时游戏状态', prompts.SYSTEM)
+        self.assertNotIn('附带的存档快照', prompts.SYSTEM)
         self.assertIn('打招呼仅简短回应', prompts.SYSTEM)
         self.assertIn('标题菜单', prompts.SYSTEM)
 
@@ -159,10 +158,60 @@ class AssistantTests(unittest.TestCase):
         results = [json.loads(line) for line in outgoing.getvalue().splitlines()]
         self.assertEqual(len(results), 7)
         self.assertEqual(results[0]['error']['code'], -32700)
-        self.assertEqual([t['name'] for t in results[2]['result']['tools']], ['wait_state', 'runtime_state', 'press_button', 'stop_action', 'game_state', 'quest_log', 'search_text'])
+        self.assertEqual([t['name'] for t in results[2]['result']['tools']],
+                         ['wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text'])
         self.assertEqual([r['error']['code'] for r in results[3:6]], [-32602] * 3)
         self.assertEqual(results[-1]['result'], {})
         self.assertEqual(harness.Harness(allow_screenshot=True).tool_specs()[-1]['name'], 'screenshot')
+
+    def test_input_tools_need_the_players_consent(self):
+        names = [s['name'] for s in harness.Harness(allow_actions=True).tool_specs()]
+        self.assertIn('press_button', names); self.assertIn('stop_action', names)
+        with self.assertRaises(harness.ToolError):
+            harness.Harness().call('press_button', {'button': 'a'})
+        listed = mcp_server.Server(harness.Harness(allow_actions=True), log=lambda _: None).handle(
+            {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})['result']['tools']
+        self.assertFalse(next(t for t in listed if t['name'] == 'press_button')['annotations']['readOnlyHint'])
+        self.assertIn('--allow-actions', backends.Context(self.config, allow_actions=True).mcp_command()[1])
+        self.assertNotIn('--allow-actions', backends.Context(self.config).mcp_command()[1])
+        self.assertIn('不允许操作游戏', prompts.user_prompt(1, '帮我按 A'))
+        self.assertIn('允许操作游戏：', prompts.user_prompt(1, '帮我按 A', actions=True))
+        # The service offers the input tools only when assistant.json and this question's request both allow it.
+        fake = {'text': '好的', 'backend': 'codex', 'seconds': 0, 'attempts': []}
+        cases = [(False, {'question': '帮我按 A', 'actions': True}, False),
+                 (True, {'question': '帮我按 A'}, False),
+                 (True, {'actions': True}, False),
+                 (True, {'question': '帮我按 A', 'actions': 'yes'}, False),
+                 (True, {'question': '帮我按 A', 'actions': True}, True)]
+        for allowed, fields, expected in cases:
+            cfg = dict(self.config, allow_actions=allowed)
+            with tempfile.TemporaryDirectory() as folder, patch.object(service, 'hint', return_value=fake) as hint:
+                service.Service(cfg, folder, log=lambda _: None).work(dict({'id': 1, 'session': 1, 'tier': 1}, **fields),
+                                                                     threading.Event())
+                self.assertIs(hint.call_args.kwargs['allow_actions'], expected, (allowed, fields))
+
+    def test_each_backend_gets_its_share_of_one_request_budget(self):
+        timeouts = []
+        clock = iter([0, 0, 50, 140, 148]).__next__   # t0; then before each backend
+        def make(name, cfg):
+            backend = Mock()
+            backend.available.return_value = (True, '')
+            backend.run.side_effect = lambda system, prompt, ctx: timeouts.append(ctx.timeout) or (_ for _ in ()).throw(
+                backends.BackendError('slow'))
+            return backend
+        with patch.object(backends, 'make', side_effect=make), patch.object(service.time, 'monotonic', side_effect=clock):
+            with self.assertRaises(backends.BackendError) as raised:
+                service.hint(self.config, allow_screenshot=False)
+        self.assertEqual(timeouts, [45, 45, 10])   # the last backend is not started with 2 s left
+        self.assertIn('no time left', str(raised.exception))
+
+    def test_codex_version_check_is_remembered(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = Path(folder, 'codex'); fake.write_text('#!/bin/sh\necho codex-cli 1.0\n'); fake.chmod(0o755)
+            codex = backends.Codex(dict(self.config, codex={'path': str(fake)}))
+            with patch.object(backends.subprocess, 'run', wraps=backends.subprocess.run) as run:
+                self.assertTrue(codex._works(str(fake))); self.assertTrue(codex._works(str(fake)))
+            self.assertEqual(run.call_count, 1)
 
     def test_save_reader_synthetic_types_and_invalid_file(self):
         data = bytearray(0x50)
@@ -198,6 +247,11 @@ class AssistantTests(unittest.TestCase):
             path = Path(folder, 'assistant.json')
             path.write_text('{"enabled":"false"}')
             with self.assertRaises(ValueError): config.load(path)
+            path.write_text('{"allow_actions":1}')
+            with self.assertRaises(ValueError): config.load(path)
+            path.write_text('{"total_timeout_seconds":0}')
+            with self.assertRaises(ValueError): config.load(path)
+        self.assertFalse(config.DEFAULTS['allow_actions'])
 
 
 if __name__ == '__main__':

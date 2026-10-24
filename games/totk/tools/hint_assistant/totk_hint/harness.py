@@ -115,11 +115,12 @@ def _quarter(v):
 
 
 class Harness:
-    def __init__(self, config=None, romfs=None, save_root=None, allow_screenshot=False):
+    def __init__(self, config=None, romfs=None, save_root=None, allow_screenshot=False, allow_actions=False):
         self.config = config or {}
         self.romfs = romfs
         self.roots = savemod.save_roots(save_root, self.config)
         self.allow_screenshot = allow_screenshot
+        self.allow_actions = allow_actions   # press_button / stop_action: the player allowed this request to act
         self._tables = None
         self._places = None
 
@@ -375,7 +376,8 @@ class Harness:
     # screenshot -------------------------------------------------------------------------------------------------------
     @staticmethod
     def game_pid():
-        """The running game's pid (runtime/game_slot.c names it in game-slot/holder), else any build/totk-native process."""
+        """The running game's pid (runtime/game_slot.c names it in game-slot/holder), else a process named totk-native
+        (by its executable: a command line that merely mentions build/totk-native is not the game)."""
         try:
             values = dict(line.split('=', 1) for line in (DATA_DIR / 'game-slot/holder').read_text().splitlines() if '=' in line)
             pid = int(values.get('game_pid') or 0)
@@ -385,7 +387,7 @@ class Harness:
                     return pid
         except (OSError, ValueError):
             pass
-        found = subprocess.run(['pgrep', '-f', 'build/totk-native'], capture_output=True, text=True).stdout.split()
+        found = subprocess.run(['pgrep', '-x', 'totk-native'], capture_output=True, text=True).stdout.split()
         return int(found[0]) if found else None
 
     def screenshot(self, timeout=8.0):
@@ -427,10 +429,29 @@ class Harness:
     # dispatch ---------------------------------------------------------------------------------------------------------
     def tool_specs(self):
         specs = [
-            {'name':'wait_state','description':'Wait up to 1000 ms, then read runtime state. Does not advance paused simulation.', 'inputSchema':{'type':'object','properties':{'duration_ms':{'type':'integer','minimum':0,'maximum':1000}},'additionalProperties':False}},
-            {'name':'runtime_state','description':'Read live runtime player presence and position. no_player is not proof of a title menu. Health and quests may be unavailable. Never substitute saved values.', 'inputSchema':{'type':'object','properties':{},'additionalProperties':False}},
-            {'name':'press_button','description':'Perform ONE explicitly requested game input, 30..1000 ms, then return live state. May change gameplay. Do not act for a request for advice. Confirm outcome from state; acknowledgement does not prove game effect.', 'inputSchema':{'type':'object','properties':{'button':{'type':'string','enum':list(BUTTONS)},'duration_ms':{'type':'integer','minimum':30,'maximum':1000}},'required':['button'],'additionalProperties':False}},
-            {'name':'stop_action','description':'Release the runtime tool input.', 'inputSchema':{'type':'object','properties':{},'additionalProperties':False}},
+            {'name': 'wait_state',
+             'description': 'Wait up to 1000 ms, then read runtime state. Does not advance paused simulation.',
+             'inputSchema': {'type': 'object', 'properties': {
+                 'duration_ms': {'type': 'integer', 'minimum': 0, 'maximum': 1000}}, 'additionalProperties': False}},
+            {'name': 'runtime_state',
+             'description': 'Read live runtime player presence and position. no_player is not proof of a title menu. '
+                            'Health and quests may be unavailable. Never substitute saved values.',
+             'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
+        ]
+        if self.allow_actions:
+            specs += [
+                {'name': 'press_button',
+                 'description': 'Perform ONE game input the player asked for, 30..1000 ms, then return live state. '
+                                'Changes gameplay. The game allows only a few presses per request. Confirm the outcome '
+                                'from state; acknowledgement does not prove game effect.',
+                 'inputSchema': {'type': 'object', 'properties': {
+                     'button': {'type': 'string', 'enum': list(BUTTONS)},
+                     'duration_ms': {'type': 'integer', 'minimum': 30, 'maximum': 1000}},
+                     'required': ['button'], 'additionalProperties': False}},
+                {'name': 'stop_action', 'description': 'Release the runtime tool input.',
+                 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
+            ]
+        specs += [
             {'name': 'game_state',
              'description': "Tears of the Kingdom: the player's current save (newest slot) read from disk. Where Link is "
                             "(layer: 地表/空岛/地底, inside a shrine, the save list's place name, rough region, nearest named "
@@ -469,13 +490,16 @@ class Harness:
     def call(self, name, arguments=None):
         """Run a tool: (JSON text, image path or None). Raises ToolError for answers the model should see as errors."""
         args = dict(arguments or {})
-        if name in ('runtime_state','press_button','stop_action','wait_state'):
+        if name in ('press_button', 'stop_action') and not self.allow_actions:
+            raise ToolError('玩家没有允许这次求助操作游戏')
+        if name in ('runtime_state', 'press_button', 'stop_action', 'wait_state'):
             from .live import call
+            op = {'runtime_state': 'state', 'press_button': 'press', 'stop_action': 'stop', 'wait_state': 'wait'}[name]
             try:
-                result=call({'runtime_state':'state','press_button':'press','stop_action':'stop','wait_state':'wait'}[name],args.get('button'),args.get('duration_ms',150))
-            except (ValueError,TimeoutError,OSError) as e:
+                result = call(op, args.get('button'), args.get('duration_ms', 150))
+            except (ValueError, TimeoutError, OSError) as e:
                 raise ToolError(str(e)) from e
-            image=None
+            image = None
         elif name == 'game_state':
             result, image = self.game_state(args.get('slot')), None
         elif name == 'quest_log':
@@ -494,11 +518,4 @@ def image_block(path):
     """(media type, base64) of a screenshot file."""
     data = Path(path).read_bytes()
     return ('image/jpeg' if str(path).endswith('.jpg') else 'image/png'), base64.b64encode(data).decode()
-
-
-def compact_snapshot(harness):
-    """The short state the hint prompt starts with (the model can still call the tools for more)."""
-    state = harness.game_state()
-    quests = harness.quest_log(limit=6)
-    return {'game_state': state, 'quest_log': quests}
 

@@ -1,5 +1,4 @@
 """The hint prompt (shared by every backend) and the clean-up of the answer for the in-game panel."""
-import json
 import re
 
 TIER_NAMES = {1: '去哪里', 2: '用什么', 3: '完整解法'}
@@ -15,8 +14,8 @@ SYSTEM = """你是《塞尔达传说 王国之泪》（1.4.3 版，在 Mac 上�
 - 若画面是标题菜单、加载界面或未进入存档，直接针对该界面回答，禁止给补血、战斗或从存档位置出发的路线建议。
 - 先回应玩家本次意图。打招呼仅简短回应，不自动汇报血量、任务或推荐路线。问“这个”“这里”时优先辨认当前画面；无法辨认就问清楚。
 - 需要实时数据时调用 runtime_state；需要历史进度时调用 game_state 或 quest_log。玩家对象在标题菜单也可能存在，存在与否都不能判断是否已进入游戏世界。未实现的字段保持未知。
-- 仅当玩家明确要求代操作时使用 press_button，每次短操作后按验证目标选择运行时或画面工具检查结果；建议、问答和打招呼不执行操作。工具成功仅代表输入已执行，不证明动作达成，不能编造结果。
-- 提示必须以存档和游戏数据为依据：请求里附带的存档快照，以及 totk-harness 的工具 game_state、quest_log、search_text（允许截图时还有 screenshot）。
+- 只有本次请求写明“允许操作游戏”、且玩家明确要你代为操作时，才使用 press_button；游戏每次求助只接受几次短按。每次短按后按验证目标选择运行时或画面工具检查结果；建议、问答和打招呼不执行操作。工具成功仅代表输入已执行，不证明动作达成，不能编造结果。
+- 提示必须以 totk-harness 工具取得的存档和游戏数据为依据：game_state、quest_log、search_text（允许截图时还有 screenshot）。
 - 地名、人名、物品名、能力名一律用游戏里的简体中文原名；拿不准就用 search_text 核对。工具查不到的事实不要编造。
 - 没有玩家的问题描述且当前画面能确认已在游戏世界时，结合画面判断玩家最可能卡在哪：林克在神庙或神殿里，就针对那里；否则选正在进行的主要任务里目标离林克最近、最合理的下一步。只讲一件事。
 - 只用 totk-harness 的工具，不要运行命令、不要读写其他文件。
@@ -33,7 +32,7 @@ SYSTEM = """你是《塞尔达传说 王国之泪》（1.4.3 版，在 Mac 上�
 - 不要 Markdown，不要标题、表情、客套话，不要复述规则或说明你查了什么。"""
 
 
-def user_prompt(tier, snapshot=None, question=None, previous=None, screenshot=False):
+def user_prompt(tier, question=None, previous=None, screenshot=False, actions=False):
     lines = [f'提示等级：{tier} 档（{TIER_NAMES[tier]}）。']
     if question:
         lines.append(f'玩家的问题：{question}')
@@ -52,12 +51,9 @@ def user_prompt(tier, snapshot=None, question=None, previous=None, screenshot=Fa
                 t, text = turn
                 lines.append(f'第 {t} 档：{text}')
     lines.append('本次允许截图：需要时可以调用 screenshot 看当前画面。' if screenshot else '本次不允许截图。')
-    if snapshot is not None:
-        lines.append('历史存档快照（不是当前状态；不能据此断言当前血量、位置或正在游玩的场景，JSON）：')
-        lines.append(json.dumps(snapshot, ensure_ascii=False, separators=(',', ':')))
-        lines.append('快照不够时再调用工具（例如 search_text 核对名字、quest_log 查别的任务）。')
-    else:
-        lines.append('按本次问题决定是否调用工具以及调用哪些工具；不要例行读取运行时或存档。')
+    lines.append('本次允许操作游戏：玩家在面板上允许了这个问题代为操作，可以用 press_button 做几次短按。' if actions
+                 else '本次不允许操作游戏，没有 press_button 工具。')
+    lines.append('按本次问题决定是否调用工具以及调用哪些工具；不要例行读取运行时或存档。')
     if question:
         lines.append('直接回答本次问题，不要机械重复之前的提示。不超过 6 行；除非玩家明确要求完整解法，否则保持当前档位。')
     else:

@@ -1323,7 +1323,7 @@ def step_app(tree, out, logs, *, version="v0", game='totk'):
                 CFBundleVersion=str(expected['version'] + 1), LSMinimumSystemVersion='26.0', NSHighResolutionCapable=True,
                 LSApplicationCategoryType='public.app-category.action-games', LSSupportsGameMode=True,
                 GCSupportsControllerUserInteraction=True,
-                NSMicrophoneUsageDescription='按住说话时录音，为露珠助手转写你的问题。',
+                NSMicrophoneUsageDescription='点击「语音」开始录音、再点「停止」结束，为露珠助手转写你的问题。',
                 NSSpeechRecognitionUsageDescription='将你主动说出的问题转成文字，发送给游戏助手。')
     icon = tree / 'build/AppIcon.icns'
     if icon.exists():
