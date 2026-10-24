@@ -63,6 +63,19 @@ int main(int argc, const char **argv) { @autoreleasepool {
  /* Without a question, nothing is adopted. */
  hintHistoryOpen=first.session;hintPendingQuestion=nil;hintHistoryAdopt();assert([hintSession isEqualToString:@"S1"]);
  hintHistoryExpanded=YES;hintHistoryOpen=nil;hintHistoryToggle();assert(!hintHistoryExpanded && [hintText.stringValue isEqualToString:@"最新的回答"]);
+ /* The first version of the file, turns oldest first: grouped into conversations, newest first. */
+ NSDictionary *old=@{@"turns":@[@{@"time":@1,@"session":@"migrated/-",@"question":@"你是谁",@"answer":@"我是露珠。",@"channel":@"Claude Code（本机）"},
+  @{@"time":@2,@"session":@"r/U1",@"question":[NSNull null],@"answer":@"先往北走。",@"tier":@1},
+  @{@"time":@3,@"session":@"r/U1",@"question":@"然后呢",@"answer":@"找卡卡利科村。",@"tier":@2,@"place":@"卡卡利科村"}]};
+ assert([[NSJSONSerialization dataWithJSONObject:old options:0 error:nil] writeToFile:hintPath(@"hint-history.json") atomically:YES]);
+ NSArray<NSDictionary *> *grouped=hintSavedSessions();
+ assert(grouped.count==2 && [grouped[0][@"id"] isEqualToString:@"U1"] && [grouped[0][@"title"] isEqualToString:@"然后呢"]);
+ assert([grouped[0][@"turns"] count]==2 && [grouped[0][@"tier"] isEqual:@2] && [grouped[0][@"place"] isEqualToString:@"卡卡利科村"]);
+ assert([grouped[1][@"title"] isEqualToString:@"你是谁"] && [grouped[1][@"channel"] isEqualToString:@"Claude Code（本机）"] && [grouped[1][@"id"] isEqualToString:@""]);
+ hintHistoryExpanded=YES;hintHistoryOpen=grouped[1];hintPendingQuestion=@"再说说";hintSession=@"S1";hintHistoryAdopt();
+ assert(hintSession==nil);   /* a conversation without an id: the question starts a new one */
+ hintHistoryOpen=grouped[0];hintHistoryExpanded=YES;hintHistoryAdopt();assert([hintSession isEqualToString:@"U1"]);
+ hintHistoryExpanded=NO;
  /* A broken file is the same as none. */
  assert([@"{ broken" writeToFile:hintPath(@"hint-history.json") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
  assert(hintHistoryCount()==3);

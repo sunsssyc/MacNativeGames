@@ -528,6 +528,7 @@ class ChannelTests(unittest.TestCase):
             path.write_text(json.dumps({'enabled': True, 'agent': {'provider': 'gemini', 'model': 'gemini-4-argon'}}))
             svc = service.Service(config.load(path), folder, log=lambda line: None)
             shrine = {'id': 'Dungeon045', 'name': '吉鲁塔古马奇神庙'}
+            svc.memory.record_answer('你是谁', 1, '我是露珠。', None, 'claude-code')   # brought in from the first version: no session
             svc.memory.record_answer('这个神庙怎么过', 1, '先往左走。', shrine, 'claude-code', 'r1', 'S1')
             svc.memory.record_answer(None, 2, '用翼和平台车。', shrine, 'agent', 'r1', 'S1')
             for i in range(service.HISTORY_SESSIONS + 1):
@@ -536,6 +537,9 @@ class ChannelTests(unittest.TestCase):
             svc.write_history()
             sessions = json.loads((Path(folder) / service.HISTORY).read_text())['sessions']
             self.assertEqual(len(sessions), service.HISTORY_SESSIONS)
+            alone = svc.memory.conversations(100)[-1]   # the oldest: the turn without a session, a conversation of its own
+            self.assertEqual((alone['id'], [t['question'] for t in alone['turns']]), ('turn-1', ['你是谁']))
+            self.assertEqual([t['answer'] for t in svc.memory.conversation('turn-1')], ['我是露珠。'])
             first = sessions[0]   # newest first: S1 was continued last
             self.assertEqual((first['id'], first['title'], first['place'], first['channel'], first['tier']),
                              ('S1', '这个神庙怎么过', '吉鲁塔古马奇神庙', 'Gemini 4（Vertex AI）', 3))

@@ -125,19 +125,23 @@ class Memory:
         with self._db() as db:
             return [dict(r) for r in db.execute(sql + ' ORDER BY id DESC LIMIT ?', args + [max(1, int(limit))])]
 
+    # A turn kept without a panel session (one brought in from assistant-memory.json, one asked from the command line) is
+    # a conversation of its own, named turn-<its id>.
+    CONVERSATION = "COALESCE(session, 'turn-' || id)"
+
     def conversation(self, session, limit=12):
         """The turns of one panel conversation, oldest first, whichever game run they were in: the panel's session ids
         are unique, so a conversation reopened from 历史 after a restart goes on with its earlier turns."""
         with self._db() as db:
-            rows = [dict(r) for r in db.execute('SELECT * FROM turns WHERE session = ? ORDER BY id DESC LIMIT ?',
+            rows = [dict(r) for r in db.execute(f'SELECT * FROM turns WHERE {self.CONVERSATION} = ? ORDER BY id DESC LIMIT ?',
                                                 (str(session), max(1, int(limit))))]
         return list(reversed(rows))
 
     def conversations(self, limit=20, turns=12):
-        """The latest panel conversations, newest first: [{"id", "turns": [...oldest first]}]."""
+        """The latest conversations, newest first: [{"id", "turns": [...oldest first]}]."""
         with self._db() as db:
-            ids = [r[0] for r in db.execute('SELECT session FROM turns WHERE session IS NOT NULL GROUP BY session '
-                                            'ORDER BY MAX(id) DESC LIMIT ?', (max(1, int(limit)),))]
+            ids = [r[0] for r in db.execute(f'SELECT {self.CONVERSATION} AS c FROM turns GROUP BY c ORDER BY MAX(id) DESC LIMIT ?',
+                                            (max(1, int(limit)),))]
         return [{'id': i, 'turns': self.conversation(i, turns)} for i in ids]
 
     def recall(self, query=None, about=None, limit=12):

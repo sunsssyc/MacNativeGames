@@ -67,7 +67,8 @@ int main(int argc, const char **argv) { @autoreleasepool {
     expect(((row_flags(113) & SETTINGS_ROW_ENABLED) != 0) == v143, "render resolution: 1.4.3");
     expect(!(row_flags(21) & SETTINGS_ROW_ENABLED), "key 4 not installed: aspect greyed out");
     expect(!(row_flags(113) & SETTINGS_ROW_RESTART) && !(row_flags(114) & SETTINGS_ROW_RESTART), "nothing waits for a restart yet");
-    expect(strstr(settings_quick_status(), "82 FPS") && strstr(settings_quick_status(), "1920×1080"), "the now line");
+    expect(strstr(settings_quick_status(82, 0), "82 FPS") && strstr(settings_quick_status(82, 0), "1920×1080"), "the now line");
+    expect(strstr(settings_quick_status(-1, 0), "--") && strstr(settings_quick_status(60, 60), "60+60 FPS"), "an unknown rate, generated frames");
     expect(settings_quick_saving() == (path ? 1 : 0), "where changes go");
     expect(shown(22, NULL) == nil && shown(120, NULL) == nil, "rows the menu reads itself are not this file's");
 
@@ -125,7 +126,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     if (optional) {
         expect(step_to(110, @"40 FPS", 6) && nvn_fps_cap() == 40, "cap 40");
         probe_cap_paused = 1;
-        expect(strstr(settings_quick_status(), zh ? "限帧暂停" : "cap paused") && is(110, @"40 FPS"), "paused cap keeps choice and reports actual pacing");
+        expect(strstr(settings_quick_status(40, 0), zh ? "限帧暂停" : "cap paused") && is(110, @"40 FPS"), "paused cap keeps choice and reports actual pacing");
         probe_cap_paused = 0;
         expect(fabsf(probe_drs_target - 25.0f) < 1e-3f, "cap 40: the controller aims at 25 ms");
         expect(is(112, @"67%"), "the quality preset's lowest scale");
@@ -144,7 +145,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
         unsetenv("TOTK_DRS_TARGET_MS");
         expect(step_to(110, T("不限帧", "Unlimited"), 6), "no cap again");
         if (path) { Settings f = file_settings(path); expect(f.fps_cap == 0 && !f.drs && fabsf(f.drs_min - 0.8f) < 1e-4f, "cap and scale in settings.txt"); }
-        int drs_calls = probe_drs_calls; settings_quick_value(110, NULL); settings_quick_status(); settings_quick_preset();
+        int drs_calls = probe_drs_calls; settings_quick_value(110, NULL); settings_quick_status(40, 0); settings_quick_preset();
         expect(probe_drs_calls == drs_calls, "looking does not set anything");
     } else {
         /* greyed out, but a preset or a file can hold a cap for a build that has one: the quality preset's 60, then 90 */

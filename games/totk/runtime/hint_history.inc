@@ -7,8 +7,31 @@ static void hintLayout(CGFloat height);
 static NSDictionary *hintHistoryOpen;   // the conversation shown; nil: the list
 static NSView *hintHistoryList;
 
+/* The first version of the file (2026-10-24 19:55) listed turns, oldest first, each with "run/session": grouped here into
+   conversations the same way, so 历史 shows them before the new service has written the file again. */
+static NSArray<NSDictionary *> *hintSessionsFromTurns(NSArray *turns){
+ NSMutableArray *order=[NSMutableArray array];NSMutableDictionary<NSString *,NSMutableArray *> *byId=[NSMutableDictionary dictionary];
+ for(id turn in turns){
+  if(![turn isKindOfClass:NSDictionary.class]||![turn[@"answer"] isKindOfClass:NSString.class])continue;
+  NSString *key=[turn[@"session"] isKindOfClass:NSString.class]?turn[@"session"]:@"-";
+  if(!byId[key]){byId[key]=[NSMutableArray array];[order addObject:key];}
+  [byId[key] addObject:turn];
+ }
+ NSMutableArray *out=[NSMutableArray array];
+ for(NSString *key in order.reverseObjectEnumerator){
+  NSArray *ts=byId[key];NSDictionary *last=ts.lastObject;NSString *title=nil;
+  for(NSDictionary *t in ts)if([t[@"question"] isKindOfClass:NSString.class]&&[t[@"question"] length]){title=t[@"question"];break;}
+  NSString *sid=[key componentsSeparatedByString:@"/"].lastObject;   // "run/session": the panel's session id; "-": none
+  NSMutableDictionary *session=[@{@"id":[sid isEqualToString:@"-"]?@"":sid,@"title":title?:@"按进度给的提示",@"turns":ts} mutableCopy];
+  for(NSString *field in @[@"time",@"place",@"channel",@"tier"])if(last[field]&&last[field]!=NSNull.null)session[field]=last[field];
+  [out addObject:session];
+ }
+ return out;
+}
 static NSArray<NSDictionary *> *hintSavedSessions(void){
- id sessions=hintJSON(hintPath(@"hint-history.json"))[@"sessions"];
+ NSDictionary *file=hintJSON(hintPath(@"hint-history.json"));
+ id sessions=file[@"sessions"];
+ if(!sessions&&[file[@"turns"] isKindOfClass:NSArray.class])sessions=hintSessionsFromTurns(file[@"turns"]);
  NSMutableArray *out=[NSMutableArray array];
  if([sessions isKindOfClass:NSArray.class])for(id s in sessions)
   if([s isKindOfClass:NSDictionary.class]&&[s[@"id"] isKindOfClass:NSString.class]&&[s[@"turns"] isKindOfClass:NSArray.class]&&[s[@"turns"] count])[out addObject:s];
@@ -115,7 +138,7 @@ static void hintHistoryShow(NSDictionary *session){
 /* Before a question is sent: when a conversation from 历史 is open, the question goes on with it. */
 static void hintHistoryAdopt(void){
  if(!hintHistoryExpanded||!hintHistoryOpen||!hintPendingQuestion.length)return;
- hintSession=hintHistoryOpen[@"id"];[hintHistory removeAllObjects];
+ NSString *sid=hintHistoryOpen[@"id"];hintSession=sid.length?sid:nil;[hintHistory removeAllObjects];   // no id: a new conversation
  NSInteger tier=[hintHistoryOpen[@"tier"] isKindOfClass:NSNumber.class]?[hintHistoryOpen[@"tier"] integerValue]:1;hintTier=tier>=1&&tier<=3?tier:1;
  for(NSDictionary *turn in hintHistoryOpen[@"turns"]){   // this run's own list, for the panel's fallback
   if(![turn isKindOfClass:NSDictionary.class])continue;

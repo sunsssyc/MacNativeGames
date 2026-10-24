@@ -6,7 +6,9 @@ extern BOOL settings_quick_apply(int action) __attribute__((weak_import));
 extern BOOL settings_quick_step(int action,int direction) __attribute__((weak_import));
 extern int settings_quick_preset(void) __attribute__((weak_import));
 extern const char *settings_quick_value(int action,int *flags) __attribute__((weak_import));
-extern const char *settings_quick_status(void) __attribute__((weak_import));
+extern const char *settings_quick_status(int fps,int generated) __attribute__((weak_import));
+extern int dm_gfx_fps_now(int *generated) __attribute__((weak_import));   // gfx/nvn/nvn_mtl.m (absent in tests)
+static int quickFpsAtOpen=-1,quickGeneratedAtOpen;   // the frame rate when the menu opened: it pauses the game
 extern int settings_quick_saving(void) __attribute__((weak_import));
 extern void runtime_settings_pause(int paused) __attribute__((weak_import));
 static NSString *pad_type_text(void);
@@ -250,7 +252,7 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  for(int i=0;i<QUICK_ROWS;i++){TOTKQuickRow *b=[TOTKQuickRow new];b.title=@(TOTK_UI(quickSpecs[i].zh,quickSpecs[i].en));b.tag=quickSpecs[i].action;b.target=self;b.action=@selector(quickAction:);b.bordered=NO;b.direction=1;b.binary=quickSpecs[i].kind==1;b.dropdown=quickSpecs[i].kind==2;[self.quickBody addSubview:b];[self.quickRows addObject:b];}
  self.quickHelpTitle=[NSTextField labelWithString:@""];self.quickHelpTitle.textColor=quickInk();self.quickHelpTitle.font=[NSFont systemFontOfSize:24 weight:NSFontWeightMedium];[self addSubview:self.quickHelpTitle];
  self.quickHelpText=[NSTextField wrappingLabelWithString:@""];self.quickHelpText.textColor=quickInk();self.quickHelpText.font=[NSFont systemFontOfSize:16];self.quickHelpText.maximumNumberOfLines=0;[self addSubview:self.quickHelpText];
- self.quickStatus=[NSTextField labelWithString:@""];self.quickStatus.textColor=[quickInk() colorWithAlphaComponent:0.75];self.quickStatus.lineBreakMode=NSLineBreakByTruncatingTail;[self addSubview:self.quickStatus];
+ self.quickStatus=[NSTextField labelWithString:@""];self.quickStatus.textColor=[quickInk() colorWithAlphaComponent:0.7];self.quickStatus.lineBreakMode=NSLineBreakByTruncatingTail;self.quickStatus.alignment=NSTextAlignmentRight;[self addSubview:self.quickStatus];
  self.quickChannelList=[NSTextField wrappingLabelWithString:@""];self.quickChannelList.textColor=[quickInk() colorWithAlphaComponent:0.8];self.quickChannelList.maximumNumberOfLines=0;[self.quickBody addSubview:self.quickChannelList];
  self.quickHint=[TOTKQuickPreset buttonWithTitle:@(TOTK_UI("打开卡关助手 · 逐级提示  8","Open the hint assistant  8")) target:self action:@selector(quickHint:)];self.quickHint.bordered=NO;[self.quickBody addSubview:self.quickHint];
  self.quickReturn=[TOTKQuickPreset buttonWithTitle:@(TOTK_UI("返回游戏  Esc","Return to game  Esc")) target:self action:@selector(toggleCollapsed:)];self.quickReturn.bordered=NO;[self addSubview:self.quickReturn];
@@ -307,10 +309,10 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  CGFloat listTop=content-row*(order.count+header)-12;self.quickChannelList.font=quickFont(row>=44?14:12);
  self.quickChannelList.frame=NSMakeRect(18,MAX(0,listTop-row*4.5),bw-36,MIN(row*4.5,listTop));
  if(wide){self.quickHelpTitle.frame=NSMakeRect(w*0.63+24,h*0.715-62,w*0.33-48,38);self.quickHelpText.frame=NSMakeRect(w*0.63+24,h*0.24+24,w*0.33-48,MAX(50,h*0.475-126));
-  self.quickStatus.frame=NSMakeRect(x+18,h*0.165,bw-18,18);}   // under the rows, above the lower divider
+  CGFloat noteWidth=MAX(40,(w-250-x)*0.5);self.quickStatus.frame=NSMakeRect(x+noteWidth+12,22,MAX(40,w-214-(x+noteWidth+12)),20);}   // in the footer, beside the note
  else{self.quickHelpTitle.frame=NSMakeRect(x,111,bw,24);self.quickHelpText.frame=NSMakeRect(x,71,bw,40);self.quickStatus.frame=NSMakeRect(x,48,bw,18);}
- self.quickHelpTitle.font=quickFont(wide?24:15);self.quickHelpText.font=quickFont(wide?16:12);self.quickStatus.font=quickFont(wide?12:11);
- self.quickReturn.frame=NSMakeRect(w-202,15,180,32);self.quickNote.frame=NSMakeRect(x,22,MAX(40,w-250-x),20);
+ self.quickHelpTitle.font=quickFont(wide?24:15);self.quickHelpText.font=quickFont(wide?16:12);self.quickStatus.font=[NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+ self.quickReturn.frame=NSMakeRect(w-202,15,180,32);self.quickNote.frame=NSMakeRect(x,22,wide?MAX(40,(w-250-x)*0.5):MAX(40,w-250-x),20);
 }
 static NSString *quick_saved_note(BOOL ok){
  if(!ok||(settings_quick_saving&&settings_quick_saving()<0))return @(TOTK_UI("已应用，但未能保存设置","Applied; settings could not be saved"));
@@ -368,7 +370,8 @@ static NSString *quick_saved_note(BOOL ok){
  return @(value);
 }
 -(void)refreshQuickMenu {
- BOOL full=fps_overlay_full_hud();quickMenuOpen=full&&!self.hidden;
+ BOOL full=fps_overlay_full_hud(),wasOpen=quickMenuOpen;quickMenuOpen=full&&!self.hidden;
+ if(quickMenuOpen&&!wasOpen){quickGeneratedAtOpen=0;quickFpsAtOpen=dm_gfx_fps_now?dm_gfx_fps_now(&quickGeneratedAtOpen):-1;}   // before the pause below
  if(runtime_settings_pause)runtime_settings_pause(quickMenuOpen&&(!bootOverlay||bootOverlay.hidden));
  if(window&&[window.contentView isKindOfClass:TOTKInputView.class]){
   BOOL hide=!quickMenuOpen&&window.isKeyWindow&&(window.styleMask&NSWindowStyleMaskFullScreen);
@@ -410,7 +413,7 @@ static NSString *quick_saved_note(BOOL ok){
    b.note=flags&SETTINGS_ROW_RESTART?@(TOTK_UI("重启后生效","after restart")):nil;
    b.accessibilityLabel=[NSString stringWithFormat:@"%@：%@%@",b.title,b.value,b.note?[@" · " stringByAppendingString:b.note]:@""];b.needsDisplay=YES;}
   if(self.quickTab==2)self.quickChannelList.stringValue=quickChannelList();
-  self.quickStatus.stringValue=settings_quick_status?[@(TOTK_UI("当前  ","Now  ")) stringByAppendingString:@(settings_quick_status())]:@"";
+  self.quickStatus.stringValue=settings_quick_status?@(settings_quick_status(quickFpsAtOpen,quickGeneratedAtOpen)):@"";
  }
  self.needsDisplay=YES;[self position];
 }

@@ -26,7 +26,6 @@ extern float runtime_drs_min(void) __attribute__((weak_import));
 extern float runtime_drs_scale(void) __attribute__((weak_import));
 extern void runtime_drs_set_min(float m) __attribute__((weak_import));
 extern void runtime_drs_set_target_ms(float ms) __attribute__((weak_import));
-int dm_gfx_fps_now(int *generated);   /* gfx/nvn/nvn_mtl.m: the overlay's frame rate */
 int taa_enabled(void);                /* gfx/nvn/totk_taa.m: key 5 */
 void taa_set(int on);
 void mfx_set(int mode);               /* gfx/nvn/totk_mfx.m: key 2 (mfx_enabled: totk_mfx_mode.h) */
@@ -258,13 +257,14 @@ const char *settings_quick_value(int action, int *flags) {
     return text;
 }
 
-/* "当前": the frame rate the overlay shows, the cap and the resolution scale in force, the canvas. */
-const char *settings_quick_status(void) {
+/* The menu's status line: the frame rate the game ran at when the menu opened (the menu pauses the game, so the rate
+   measured while it is open says nothing; fps < 0: unknown), the cap and the resolution scale in force, the canvas. */
+const char *settings_quick_status(int fps, int generated) {
     static char text[160];
-    int generated = 0, fps = dm_gfx_fps_now(&generated), n = 0;
-    if (fps < 0) n = snprintf(text, sizeof text, "-- FPS");
-    else if (generated > 0) n = snprintf(text, sizeof text, "%d+%d FPS", fps, generated);
-    else n = snprintf(text, sizeof text, "%d FPS", fps);
+    int n = 0;
+    if (fps < 0) n = snprintf(text, sizeof text, "%s", TOTK_UI("暂停前 -- FPS", "-- FPS before the pause"));
+    else if (generated > 0) n = snprintf(text, sizeof text, TOTK_UI("暂停前 %d+%d FPS", "%d+%d FPS before the pause"), fps, generated);
+    else n = snprintf(text, sizeof text, TOTK_UI("暂停前 %d FPS", "%d FPS before the pause"), fps);
     if (nvn_fps_cap && n < (int)sizeof text) {
         int cap = nvn_fps_cap();
         n += cap > 0 ? snprintf(text + n, sizeof text - n, TOTK_UI(" · 上限 %d", " · cap %d"), cap) : snprintf(text + n, sizeof text - n, "%s", TOTK_UI(" · 不限帧率", " · no cap"));
