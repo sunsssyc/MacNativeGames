@@ -12,6 +12,7 @@ BACKENDS = ('claude-code', 'codex', 'vertex-claude-code', 'vertex', 'agent')
 DEFAULTS = {
     'enabled': False,             # the game's launcher starts the hint service (serve) only when true
     'backends': list(BACKENDS),   # "auto" tries these in order until one answers
+    'channel': 'auto',            # one of BACKENDS to ask first (the game's settings menu, 辅助 › AI 渠道); "auto": the order above
     'tier_default': 1,            # the first press of key 8: 1 where to go, 2 what to use, 3 full solution
     'observe_current_scene': False,  # explicit opt-in; one game window image per question
     # may the model look at the game window: the frame comes from the game itself (no macOS screen recording), and
@@ -83,6 +84,8 @@ def load(path=None):
             raise ValueError(f'{path}: {key} must be true or false')
     if not isinstance(config['backends'], list) or any(name not in BACKENDS for name in config['backends']):
         raise ValueError(f'{path}: backends must be a list from {BACKENDS}')
+    if config['channel'] != 'auto' and config['channel'] not in BACKENDS:
+        raise ValueError(f'{path}: channel must be auto or one of {BACKENDS}')
     for key in ('timeout_seconds', 'total_timeout_seconds'):
         timeout = config[key]
         if isinstance(timeout, bool) or not isinstance(timeout, (float, int)) or not 1 <= timeout <= 600:

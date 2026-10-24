@@ -109,6 +109,7 @@ void runtime_shortcut_help_toggle(void);
 int fps_overlay_toggle_hints(void);   /* key 1: all -> minimal (FPS only) -> off; returns the new mode, 0 = off */
 int fps_overlay_hud_mode(void);
 int fps_overlay_full_hud(void);
+int fps_overlay_hints_enabled(void);   /* gfx/nvn/fps_overlay.c: the HUD shows (key 1 is not at off) */
 int runtime_aspect_toggle(void);   /* runtime/aspect_patch.h: key 4, 16:9 -> fit to the window / display -> 21:9 (or TOTK_ASPECT) (Mac, 1.2.1 / 1.4.3); 0 where unavailable */
 int runtime_aspect_step(void);     /* key 4's step: 0 16:9, 1 fit to the window, 2 21:9 / TOTK_ASPECT; -1 where unavailable */
 int runtime_aspect_set(int step);  /* the settings window: key 4's step directly; 0 where unavailable */

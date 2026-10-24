@@ -8,7 +8,8 @@
     agent                the assistant's own agent loop (agent.py) with any model behind an API: Anthropic, an
                          OpenAI-compatible server (a local one too), or Vertex AI; assistant.json "agent"
 
-"auto" tries assistant.json "backends" in order and takes the first answer."""
+"auto" tries assistant.json "backends" in order and takes the first answer; "channel" (the game's settings menu, 辅助 ›
+AI 渠道) puts one of them first."""
 import glob
 import json
 import os
@@ -25,6 +26,7 @@ from . import tables as tablemod
 
 RUN_PY = Path(__file__).resolve().parents[1] / 'run.py'
 TOOLS = ('wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text', 'guide', 'memory')
+NAMES = ('claude-code', 'codex', 'vertex-claude-code', 'vertex', 'agent')
 ACTION_TOOLS = ('press_button', 'stop_action')   # only for a request the player allowed to act (Context.allow_actions)
 CODEX_FEATURES_OFF = ('apps', 'browser_use', 'browser_use_external', 'computer_use', 'image_generation', 'in_app_browser',
                       'plugins', 'remote_plugin', 'hooks', 'goals', 'memories')
@@ -383,6 +385,22 @@ class Codex:
         return {'text': text, 'model': self.settings.get('model') or 'default'}
 
 
+LABELS = {'claude-code': 'Claude Code', 'codex': 'Codex', 'vertex-claude-code': 'Claude Code（Vertex）', 'vertex': 'Claude（Vertex）'}
+
+
+def label(name, config):
+    """The channel's name as the game's settings menu shows it."""
+    if name != 'agent':
+        return LABELS.get(name, name)
+    agent = config.get('agent') or {}
+    provider, model = agent.get('provider'), agent.get('model') or ''
+    if provider == 'gemini':
+        return 'Gemini 4' if not model or model.startswith('gemini-4') else model
+    if provider == 'vertex':
+        return 'Claude 智能体（Vertex）'
+    return model or ('Claude API' if provider == 'anthropic' else '内置智能体')
+
+
 def make(name, config):
     if name == 'claude-code':
         return ClaudeCode(config)
@@ -401,14 +419,18 @@ def make(name, config):
 
 def order(name, config):
     if name in (None, '', 'auto'):
-        return [n for n in config.get('backends') or () if n in ('claude-code', 'codex', 'vertex-claude-code', 'vertex', 'agent')]
+        names = [n for n in config.get('backends') or () if n in NAMES]
+        channel = config.get('channel')
+        if channel in NAMES:   # the player's channel first, the others after it in their order
+            names = [channel] + [n for n in names if n != channel]
+        return names
     return [name]
 
 
 def report(config):
     """[(backend, available, reason)] for every backend."""
     out = []
-    for name in ('claude-code', 'codex', 'vertex-claude-code', 'vertex', 'agent'):
+    for name in NAMES:
         try:
             ok, why = make(name, config).available()
         except Exception as e:

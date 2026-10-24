@@ -1,11 +1,13 @@
-/* Native, mouse-operated options screen. Values always come from live runtime state. */
+/* Native, mouse-operated options screen: every setting, drawn in the game's own style (QUICK_MENU_DESIGN.md). Values
+   always come from live runtime state: settings_panel.m holds the model behind the graphics rows and writes settings.txt;
+   the assistant's AI channel is assistant.json "channel", which the hint service reads before each question. */
+#include "settings_file.h"
 extern BOOL settings_quick_apply(int action) __attribute__((weak_import));
 extern BOOL settings_quick_step(int action,int direction) __attribute__((weak_import));
 extern int settings_quick_preset(void) __attribute__((weak_import));
-extern void settings_quick_open(void) __attribute__((weak_import));
-extern int nvn_fps_cap(void) __attribute__((weak_import));
-extern int runtime_drs_enabled(void) __attribute__((weak_import));
-extern float runtime_drs_min(void) __attribute__((weak_import));
+extern const char *settings_quick_value(int action,int *flags) __attribute__((weak_import));
+extern const char *settings_quick_status(void) __attribute__((weak_import));
+extern int settings_quick_saving(void) __attribute__((weak_import));
 extern void runtime_settings_pause(int paused) __attribute__((weak_import));
 static NSString *pad_type_text(void);
 void runtime_input_key_synthetic(unsigned code,int down);
@@ -16,11 +18,91 @@ void runtime_input_key_synthetic(unsigned code,int down);
 -(void)quickAction:(NSButton *)sender;
 -(void)quickTabAction:(NSButton *)sender;
 -(void)focusQuickRow:(NSButton *)sender;
+-(void)focusQuickHint;
+-(NSArray<NSNumber *> *)quickOrder;
 @end
 static NSColor *quickAccent(void){return [NSColor colorWithCalibratedRed:0.88 green:0.40 blue:0.015 alpha:1];}
 static NSColor *quickGold(void){return [NSColor colorWithCalibratedRed:1 green:0.9 blue:0.50 alpha:1];}
 static NSColor *quickInk(void){return [NSColor colorWithCalibratedRed:0.99 green:0.975 blue:0.85 alpha:1];}
 static NSFont *quickFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-Regular" size:size]?:[NSFont systemFontOfSize:size];}
+
+/* The rows, in the order each tab shows them: tab 0 画面 (below the presets), 1 操作, 2 辅助 (below the hint assistant).
+   kind 0 is a value with previous / next arrows, 1 an on / off switch. Actions 1xx and the number keys' codes are
+   settings_quick_step's; 22 and 26 press keys 6 and 7; 120 is the AI channel. */
+enum { QUICK_CHANNEL=120, QUICK_HINT=-1 };
+typedef struct { int action,tab,kind; const char *zh,*en,*help_zh,*help_en; } QuickRowSpec;
+static const QuickRowSpec quickSpecs[]={
+ {110,0,0,"帧率上限","Frame limit","限制最高帧率，兼顾流畅度与功耗。\n\n显示器刷新率可整除时，帧间隔会与显示节拍对齐。","Limit the frame rate to balance smoothness and power.\n\nWhen the display's refresh rate divides evenly, frames follow its beat."},
+ {111,0,1,"动态分辨率","Dynamic resolution","帧时间超过上限时降低渲染分辨率，优先保持画面流畅。","Lowers the render resolution when a frame takes longer than the cap, to keep the game smooth."},
+ {112,0,0,"最低分辨率","Lowest resolution","动态分辨率最多降到这个比例。打开动态分辨率后才能调整。","How far dynamic resolution may go down. Adjustable while dynamic resolution is on."},
+ {113,0,0,"渲染分辨率","Render resolution","游戏实际渲染的画面大小。越高越清晰，也越吃显卡。\n\n重启游戏后生效。","The size the game renders at: sharper when higher, and heavier on the GPU.\n\nTakes effect after a restart."},
+ {20,0,0,"画面","Picture","1080p 画面、MetalFX 放大到 2K，或原生 2K 画布（3 键）。","1080p, MetalFX upscaled to 2K, or the native 2K canvas (key 3)."},
+ {23,0,1,"边缘平滑","Edge smoothing","使用 MetalFX 时间性抗锯齿平滑画面边缘（5 键）。","Smooth edges with MetalFX temporal anti-aliasing (key 5)."},
+ {114,0,0,"各向异性过滤","Anisotropic filtering","让斜着看到的地面和远处的贴图更清楚。\n\n重启游戏后生效。","Sharper textures on ground and surfaces seen at an angle.\n\nTakes effect after a restart."},
+ {19,0,0,"补帧","Frame generation","生成中间帧以改善观感（2 键）。部分模式在下一帧才生效，显示的是实际状态。","Generate intermediate frames (key 2). Some modes take effect at the next frame; the value shows the state in force."},
+ {21,0,0,"画面比例","Aspect ratio","标准 16:9、适配窗口或宽屏（4 键）。","Standard 16:9, fit to the window, or widescreen (key 4)."},
+ {22,1,0,"手柄类型","Controller","选择手柄按键布局，或自动识别连接的手柄。","Choose a controller layout or detect the connected controller automatically."},
+ {26,1,1,"鼠标视角","Mouse camera","用鼠标控制视角。收起设置后生效；⌘Tab 可释放指针。","Control the camera with the mouse after closing settings. Command-Tab releases the pointer."},
+ {QUICK_CHANNEL,2,0,"AI 渠道","AI channel","卡关助手先问哪个模型。它不可用或出错时，按顺序换下一个。\n\n下一个问题就用新的渠道，不用重启游戏。","Which model the hint assistant asks first. When it is unavailable or fails, the next one in order answers.\n\nThe next question uses the new channel; no restart needed."},
+};
+enum { QUICK_ROWS=sizeof(quickSpecs)/sizeof(quickSpecs[0]) };
+
+/* The assistant's settings and the channels' state, next to the game's other files (TOTK_ASSISTANT_FOLDER: tests only). */
+static NSString *quickAssistantPath(NSString *name){
+ const char *folder=getenv("TOTK_ASSISTANT_FOLDER");
+ NSString *base=folder&&*folder?@(folder):[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/TOTK"];
+ return [base stringByAppendingPathComponent:name];
+}
+static NSDictionary *quickJSONFile(NSString *path){
+ NSData *data=[NSData dataWithContentsOfFile:path];id value=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+ return [value isKindOfClass:NSDictionary.class]?value:nil;
+}
+static NSArray<NSString *> *quickChannels(void){return @[@"auto",@"claude-code",@"agent",@"codex",@"vertex-claude-code",@"vertex"];}
+static NSString *quickChannel(void){
+ id channel=quickJSONFile(quickAssistantPath(@"assistant.json"))[@"channel"];
+ return [channel isKindOfClass:NSString.class]&&[quickChannels() containsObject:channel]?channel:@"auto";
+}
+/* What the hint service last found about each channel (tools/hint_assistant: hint-backends.json), or nil. */
+static NSDictionary *quickChannelState(NSString *name){
+ id all=quickJSONFile(quickAssistantPath(@"hint-backends.json"))[@"backends"];id one=[all isKindOfClass:NSDictionary.class]?all[name]:nil;
+ return [one isKindOfClass:NSDictionary.class]?one:nil;
+}
+static NSString *quickChannelLabel(NSString *name){
+ if([name isEqual:@"auto"])return @(TOTK_UI("自动","Automatic"));
+ id label=quickChannelState(name)[@"label"];if([label isKindOfClass:NSString.class]&&[label length])return label;
+ if([name isEqual:@"claude-code"])return @"Claude Code";
+ if([name isEqual:@"codex"])return @"Codex";
+ if([name isEqual:@"vertex-claude-code"])return @"Claude Code（Vertex）";
+ if([name isEqual:@"vertex"])return @"Claude（Vertex）";
+ id agent=quickJSONFile(quickAssistantPath(@"assistant.json"))[@"agent"];
+ NSString *provider=[agent isKindOfClass:NSDictionary.class]&&[agent[@"provider"] isKindOfClass:NSString.class]?agent[@"provider"]:@"";
+ NSString *model=[agent isKindOfClass:NSDictionary.class]&&[agent[@"model"] isKindOfClass:NSString.class]?agent[@"model"]:@"";
+ if([provider isEqual:@"gemini"])return [model hasPrefix:@"gemini-4"]||!model.length?@"Gemini 4":model;
+ return model.length?model:@(TOTK_UI("内置智能体","Built-in agent"));
+}
+/* The next channel in either direction, written into assistant.json with everything else it holds. */
+static BOOL quickChannelStep(int direction){
+ NSString *path=quickAssistantPath(@"assistant.json");
+ NSDictionary *existing=quickJSONFile(path);
+ if(!existing&&[NSFileManager.defaultManager fileExistsAtPath:path])return NO;   // a file being edited by hand: leave it alone
+ NSArray *names=quickChannels();NSUInteger i=[names indexOfObject:quickChannel()];
+ NSMutableDictionary *next=existing?[existing mutableCopy]:[NSMutableDictionary new];
+ next[@"channel"]=names[(i+names.count+(direction<0?-1:1))%names.count];
+ NSData *data=[NSJSONSerialization dataWithJSONObject:next options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:nil];
+ [NSFileManager.defaultManager createDirectoryAtPath:path.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+ return data&&[data writeToFile:path options:NSDataWritingAtomic error:nil];
+}
+/* Each channel and whether it can answer here, as the hint service last found (below the AI channel row). */
+static NSString *quickChannelList(void){
+ NSMutableArray *lines=[NSMutableArray arrayWithObject:@(TOTK_UI("各渠道状态","Channels"))];NSString *current=quickChannel();
+ for(NSString *name in quickChannels()){if([name isEqual:@"auto"])continue;NSDictionary *state=quickChannelState(name);if(!state)continue;
+  id why=state[@"why"];NSString *mark=[name isEqual:current]?@(TOTK_UI(" · 当前"," · current")):@"";
+  [lines addObject:[NSString stringWithFormat:@"%@　%@%@",quickChannelLabel(name),[state[@"ok"] boolValue]?@(TOTK_UI("可用","available"))
+   :[why isKindOfClass:NSString.class]&&[why length]?[NSString stringWithFormat:@(TOTK_UI("不可用：%@","unavailable: %@")),why]:@(TOTK_UI("不可用","unavailable")),mark]];}
+ if(lines.count==1)[lines addObject:@(TOTK_UI("打开一次卡关助手后，这里会显示各渠道是否可用。","Whether each channel works shows here after the hint assistant has been opened once."))];
+ return [lines componentsJoinedByString:@"\n"];
+}
+
 // Shared text metrics keep the compact label and settings title on one baseline.
 static NSDictionary *compactAttributes(void){return @{NSFontAttributeName:quickFont(12),NSForegroundColorAttributeName:quickInk()};}
 @interface TOTKCompactLabel:NSTextField
@@ -60,7 +142,7 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  [text drawInRect:r withAttributes:@{NSFontAttributeName:quickFont(size),NSForegroundColorAttributeName:ink,NSParagraphStyleAttributeName:p}];
 }
 @interface TOTKQuickRow:NSButton
-@property(copy) NSString *value;
+@property(copy) NSString *value,*note;   // note: a short remark beside the name, in gold ("重启后生效")
 @property BOOL hovered,focused,binary,on;
 @property NSInteger direction;
 @property(strong) NSTrackingArea *hoverArea;
@@ -82,14 +164,16 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
 }
 -(void)drawRect:(NSRect)dirty{
  (void)dirty;CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds),split=w*0.51;
- BOOL hot=self.enabled&&(self.focused||self.hovered||self.highlighted);CGFloat font=h>=44?17:14;
+ BOOL hot=self.enabled&&(self.focused||self.hovered||self.highlighted);CGFloat font=h>=44?17:h>=34?14:13;
  [[NSColor colorWithCalibratedRed:0.68 green:0.65 blue:0.57 alpha:0.24] setFill];
  [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,0,2) xRadius:3 yRadius:3] fill];
  NSRect box=NSMakeRect(split,4,w-split-4,h-8);
  [[NSColor colorWithCalibratedWhite:0.015 alpha:0.87] setFill];[[NSBezierPath bezierPathWithRoundedRect:box xRadius:3 yRadius:3] fill];
  [[quickInk() colorWithAlphaComponent:0.23] setStroke];[[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(box,1,1) xRadius:2 yRadius:2] stroke];
  NSColor *ink=self.enabled?quickInk():[quickInk() colorWithAlphaComponent:0.4];
- quickText(self.title,NSMakeRect(18,(h-font-5)/2,split-28,font+7),font,ink,NSTextAlignmentLeft);
+ CGFloat noteWidth=self.note.length?MIN(split*0.45,[self.note sizeWithAttributes:@{NSFontAttributeName:quickFont(font-3)}].width+4):0;
+ quickText(self.title,NSMakeRect(18,(h-font-5)/2,split-28-noteWidth,font+7),font,ink,NSTextAlignmentLeft);
+ if(noteWidth)quickText(self.note,NSMakeRect(split-10-noteWidth,(h-font+1)/2,noteWidth,font+4),font-3,quickGold(),NSTextAlignmentRight);
  NSRect choice=NSInsetRect(box,4,4);
  if(self.binary){CGFloat half=choice.size.width/2;NSRect selected=choice;selected.size.width=half;if(!self.on)selected.origin.x+=half;
   [[quickAccent() colorWithAlphaComponent:self.enabled?1:0.25] setFill];[[NSBezierPath bezierPathWithRoundedRect:selected xRadius:2 yRadius:2] fill];
@@ -108,10 +192,10 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
 @end
 @implementation TOTKQuickPreset
 -(void)drawRect:(NSRect)dirty{
- (void)dirty;BOOL hot=self.enabled&&(self.hovered||self.highlighted);BOOL selected=self.state==NSControlStateValueOn;
+ (void)dirty;BOOL hot=self.enabled&&(self.hovered||self.highlighted||self.focused);BOOL selected=self.state==NSControlStateValueOn;
  [(selected?quickAccent():[NSColor colorWithCalibratedWhite:0.025 alpha:0.65]) setFill];NSRect r=NSInsetRect(self.bounds,1,2);[[NSBezierPath bezierPathWithRoundedRect:r xRadius:2 yRadius:2] fill];
  [[quickInk() colorWithAlphaComponent:hot?0.9:0.25] setStroke];NSBezierPath *edge=[NSBezierPath bezierPathWithRoundedRect:r xRadius:2 yRadius:2];edge.lineWidth=hot?2:0.6;[edge stroke];
- CGFloat font=NSHeight(self.bounds)>=40?16:13;quickText(self.title,NSMakeRect(5,(NSHeight(self.bounds)-font-5)/2,NSWidth(self.bounds)-10,font+7),font,self.enabled?quickInk():[quickInk() colorWithAlphaComponent:0.4],NSTextAlignmentCenter);
+ CGFloat font=NSHeight(self.bounds)>=40?16:NSHeight(self.bounds)>=34?13:12;quickText(self.title,NSMakeRect(5,(NSHeight(self.bounds)-font-5)/2,NSWidth(self.bounds)-10,font+7),font,self.enabled?quickInk():[quickInk() colorWithAlphaComponent:0.4],NSTextAlignmentCenter);
 }
 @end
 @implementation TOTKShortcutHelp (QuickMenu)
@@ -129,29 +213,43 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  self.quickPresets=[NSView new];[self.quickBody addSubview:self.quickPresets];
  NSArray *presets=@[@(TOTK_UI("性能","Performance")),@(TOTK_UI("均衡","Balanced")),@(TOTK_UI("画质","Quality"))];
  for(int i=0;i<3;i++){NSButton *b=[TOTKQuickPreset buttonWithTitle:presets[i] target:self action:@selector(quickPreset:)];b.tag=i;b.bordered=NO;b.enabled=settings_quick_apply!=NULL;[self.quickPresets addSubview:b];}
- NSArray *titles=@[@(TOTK_UI("帧率上限","Frame limit")),@(TOTK_UI("动态分辨率","Dynamic resolution")),@(TOTK_UI("补帧","Frame generation")),@(TOTK_UI("渲染分辨率","Render resolution")),@(TOTK_UI("画面比例","Aspect ratio")),@(TOTK_UI("边缘平滑","Edge smoothing")),@(TOTK_UI("手柄类型","Controller")),@(TOTK_UI("鼠标视角","Mouse camera"))];
- const int actions[]={110,111,19,20,21,23,22,26};self.quickRows=[NSMutableArray new];
- for(int i=0;i<8;i++){TOTKQuickRow *b=[TOTKQuickRow new];b.title=titles[i];b.tag=actions[i];b.target=self;b.action=@selector(quickAction:);b.bordered=NO;b.direction=1;b.binary=i==1||i==5||i==7;[self.quickBody addSubview:b];[self.quickRows addObject:b];}
+ self.quickRows=[NSMutableArray new];
+ for(int i=0;i<QUICK_ROWS;i++){TOTKQuickRow *b=[TOTKQuickRow new];b.title=@(TOTK_UI(quickSpecs[i].zh,quickSpecs[i].en));b.tag=quickSpecs[i].action;b.target=self;b.action=@selector(quickAction:);b.bordered=NO;b.direction=1;b.binary=quickSpecs[i].kind==1;[self.quickBody addSubview:b];[self.quickRows addObject:b];}
  self.quickHelpTitle=[NSTextField labelWithString:@""];self.quickHelpTitle.textColor=quickInk();self.quickHelpTitle.font=[NSFont systemFontOfSize:24 weight:NSFontWeightMedium];[self addSubview:self.quickHelpTitle];
  self.quickHelpText=[NSTextField wrappingLabelWithString:@""];self.quickHelpText.textColor=quickInk();self.quickHelpText.font=[NSFont systemFontOfSize:16];self.quickHelpText.maximumNumberOfLines=0;[self addSubview:self.quickHelpText];
- self.quickHint=[TOTKQuickPreset buttonWithTitle:@(TOTK_UI("卡关助手 · 逐级提示","Hint assistant")) target:self action:@selector(quickHint:)];self.quickHint.bordered=NO;[self.quickBody addSubview:self.quickHint];
- self.quickSettings=[TOTKQuickPreset buttonWithTitle:@(TOTK_UI("全部设置…  ⌘,","All settings…  ⌘,")) target:self action:@selector(quickSettings:)];self.quickSettings.bordered=NO;self.quickSettings.enabled=settings_quick_open!=NULL;[self.quickBody addSubview:self.quickSettings];
+ self.quickStatus=[NSTextField labelWithString:@""];self.quickStatus.textColor=[quickInk() colorWithAlphaComponent:0.75];self.quickStatus.lineBreakMode=NSLineBreakByTruncatingTail;[self addSubview:self.quickStatus];
+ self.quickChannelList=[NSTextField wrappingLabelWithString:@""];self.quickChannelList.textColor=[quickInk() colorWithAlphaComponent:0.8];self.quickChannelList.maximumNumberOfLines=0;[self.quickBody addSubview:self.quickChannelList];
+ self.quickHint=[TOTKQuickPreset buttonWithTitle:@(TOTK_UI("打开卡关助手 · 逐级提示  8","Open the hint assistant  8")) target:self action:@selector(quickHint:)];self.quickHint.bordered=NO;[self.quickBody addSubview:self.quickHint];
  self.quickReturn=[TOTKQuickPreset buttonWithTitle:@(TOTK_UI("返回游戏  Esc","Return to game  Esc")) target:self action:@selector(toggleCollapsed:)];self.quickReturn.bordered=NO;[self addSubview:self.quickReturn];
  self.quickNote=[NSTextField labelWithString:@(TOTK_UI("鼠标点击调整 · 方向键选择 · Tab 切换分类","Click to adjust · Arrow keys select · Tab changes category"))];self.quickNote.textColor=[quickInk() colorWithAlphaComponent:0.7];self.quickNote.font=[NSFont systemFontOfSize:11];[self addSubview:self.quickNote];
  [self focusQuickRow:self.quickRows[0]];
 }
+/* The rows the current tab shows, top to bottom (QUICK_HINT: the hint assistant button above 辅助's rows). */
+-(NSArray<NSNumber *> *)quickOrder{
+ NSMutableArray *order=[NSMutableArray array];if(self.quickTab==2)[order addObject:@(QUICK_HINT)];
+ for(int i=0;i<QUICK_ROWS;i++)if(quickSpecs[i].tab==self.quickTab)[order addObject:@(i)];
+ return order;
+}
 -(void)focusQuickRow:(NSButton *)sender{
+ if(sender==self.quickHint){[self focusQuickHint];return;}
  NSUInteger index=[self.quickRows indexOfObject:sender];if(index==NSNotFound)return;self.quickFocused=(NSInteger)index;
- NSArray *help=@[@(TOTK_UI("限制最高帧率，兼顾流畅度与功耗。\n\n显示器刷新率可整除时，帧间隔会与显示节拍对齐。","Limit frame rate to balance smoothness and power consumption.")),@(TOTK_UI("根据运行负载调整渲染分辨率，优先保持画面流畅。\n\n最低比例 67%","Adjust rendering resolution to preserve smooth gameplay.\n\nMinimum scale: 67%")),@(TOTK_UI("生成中间帧以改善观感。部分模式需要重启；实际状态以运行时显示为准。","Generate intermediate frames. Some modes require a restart; the displayed value reflects runtime state.")),@(TOTK_UI("较高的分辨率让画面更清晰，也会增加图形负载。","Higher resolution improves clarity and increases graphics load.")),@(TOTK_UI("调整游戏画面比例。可选择标准比例、适配窗口或宽屏。","Choose standard, fit-to-window or widescreen presentation.")),@(TOTK_UI("使用 MetalFX 时间性抗锯齿平滑画面边缘。","Smooth edges with MetalFX temporal antialiasing.")),@(TOTK_UI("选择手柄按键布局，或自动识别连接的手柄。","Choose a controller layout or detect the connected controller automatically.")),@(TOTK_UI("用鼠标控制视角。收起设置后生效；⌘Tab 可释放指针。","Control the camera with the mouse after closing settings. Command-Tab releases the pointer."))];
- self.quickHelpTitle.stringValue=sender.title;self.quickHelpText.stringValue=help[index];
- if(index==1&&runtime_drs_min)self.quickHelpText.stringValue=[NSString stringWithFormat:@(TOTK_UI("根据运行负载调整渲染分辨率，优先保持画面流畅。\n\n最低比例 %.0f%%","Adjust rendering resolution to preserve smooth gameplay.\n\nMinimum scale: %.0f%%")),runtime_drs_min()*100.0];
+ const QuickRowSpec *spec=&quickSpecs[index];
+ self.quickHelpTitle.stringValue=sender.title;
+ self.quickHelpText.stringValue=@(TOTK_UI(spec->help_zh,spec->help_en));
+ self.quickHint.state=NSControlStateValueOff;((TOTKQuickRow *)self.quickHint).focused=NO;self.quickHint.needsDisplay=YES;
  for(NSUInteger i=0;i<self.quickRows.count;i++){TOTKQuickRow *b=(id)self.quickRows[i];b.hovered=NO;b.focused=i==index;b.needsDisplay=YES;}
+}
+-(void)focusQuickHint{
+ self.quickFocused=QUICK_HINT;((TOTKQuickRow *)self.quickHint).focused=YES;self.quickHint.needsDisplay=YES;
+ for(TOTKQuickRow *b in self.quickRows){b.focused=NO;b.needsDisplay=YES;}
+ self.quickHelpTitle.stringValue=@(TOTK_UI("卡关助手","Hint assistant"));
+ self.quickHelpText.stringValue=@(TOTK_UI("卡住时问露珠：先给方向，再给要用什么，最后才是完整解法。\n\n也可以在游戏里随时按 8 打开。","Ask Riju when you are stuck: where to go first, then what to use, the full solution last.\n\nKey 8 opens it any time in the game."));
 }
 -(void)quickTabAction:(NSButton *)sender{
  self.quickTab=sender.tag;[self refreshQuickMenu];
- if(self.quickTab<2)[self focusQuickRow:self.quickRows[self.quickTab?6:0]];
- else{self.quickFocused=8;self.quickHint.state=NSControlStateValueOn;self.quickSettings.state=NSControlStateValueOff;self.quickHelpTitle.stringValue=@(TOTK_UI("辅助","Assistance"));self.quickHelpText.stringValue=@(TOTK_UI("需要线索时打开卡关助手，按需查看逐级提示。\n\n全部设置包含启动选项与更多说明。","Open the hint assistant for progressive clues.\n\nAll settings includes startup options and additional details."));}
- [self.quickBody scrollPoint:NSMakePoint(0,NSHeight(self.quickBody.bounds))];[self.window makeFirstResponder:self.window.contentView];
+ NSNumber *first=[self quickOrder].firstObject;
+ if(first.integerValue==QUICK_HINT)[self focusQuickHint];else[self focusQuickRow:self.quickRows[first.integerValue]];
+ [self layoutQuickMenu];[self.quickBody scrollPoint:NSMakePoint(0,NSHeight(self.quickBody.bounds))];[self.quickScroll flashScrollers];[self.window makeFirstResponder:self.window.contentView];
 }
 -(void)layoutQuickMenu{
  CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);BOOL full=fps_overlay_full_hud();
@@ -162,34 +260,53 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  CGFloat tw=MIN(420,w-80);self.quickTabs.frame=NSMakeRect((w-tw)/2,h*0.795,tw,40);
  for(NSView *v in self.quickTabs.subviews)v.frame=NSMakeRect(v.tag*tw/3,0,tw/3,40);
  BOOL wide=w>=820;CGFloat x=w*0.065,bw=wide?w*0.55:w*0.87,helpHeight=wide?0:66;
- CGFloat available=MAX(80,h*0.52-helpHeight),row=MAX(38,available/7);
+ NSArray<NSNumber *> *order=[self quickOrder];NSInteger header=self.quickTab==0?1:0;   // 画面: the presets above the rows
+ // Rows shrink to fit the tab (down to 28 pt); a window too small for that scrolls.
+ CGFloat available=MAX(80,h*0.52-helpHeight),row=MAX(28,MIN(52,floor(available/MAX(7,order.count+header))));
  self.quickScroll.frame=NSMakeRect(x,h*0.20+helpHeight,bw,available);
- CGFloat content=MAX(available,self.quickTab==0?row*7:self.quickTab==1?row*2:row*2);
+ CGFloat content=MAX(available,row*(order.count+header));
  [self.quickBody setFrameSize:NSMakeSize(bw,content)];
  self.quickPresets.frame=NSMakeRect(bw*0.51,content-row,bw*0.49-4,row);
- self.quickPresetLabel.frame=NSMakeRect(18,content-row+(row-22)/2,bw*0.51-28,24);self.quickPresetLabel.font=quickFont(row>=44?17:14);
+ self.quickPresetLabel.frame=NSMakeRect(18,content-row+(row-22)/2,bw*0.51-28,24);self.quickPresetLabel.font=quickFont(row>=44?17:row>=34?14:13);
  for(NSView *v in self.quickPresets.subviews)v.frame=NSMakeRect(v.tag*NSWidth(self.quickPresets.bounds)/3,0,NSWidth(self.quickPresets.bounds)/3,row);
- const int order[]={0,1,3,4,5,2,6,7};
- for(int i=0;i<8;i++){NSButton *b=self.quickRows[order[i]];CGFloat y=content-row*(i<6?i+2:i-5);b.frame=NSMakeRect(0,y,bw,row);}
- self.quickHint.frame=NSMakeRect(0,content-row,bw,row);self.quickSettings.frame=NSMakeRect(0,content-row*2,bw,row);
- if(wide){self.quickHelpTitle.frame=NSMakeRect(w*0.63+24,h*0.715-62,w*0.33-48,38);self.quickHelpText.frame=NSMakeRect(w*0.63+24,h*0.24+24,w*0.33-48,MAX(50,h*0.475-126));}
- else{self.quickHelpTitle.frame=NSMakeRect(x,111,bw,24);self.quickHelpText.frame=NSMakeRect(x,71,bw,40);}
- self.quickHelpTitle.font=quickFont(wide?24:15);self.quickHelpText.font=quickFont(wide?16:12);
+ for(NSUInteger i=0;i<order.count;i++){CGFloat y=content-row*(i+1+header);NSInteger n=order[i].integerValue;
+  (n==QUICK_HINT?self.quickHint:self.quickRows[n]).frame=NSMakeRect(0,y,bw,row);}
+ CGFloat listTop=content-row*(order.count+header)-12;self.quickChannelList.font=quickFont(row>=44?14:12);
+ self.quickChannelList.frame=NSMakeRect(18,MAX(0,listTop-row*4.5),bw-36,MIN(row*4.5,listTop));
+ if(wide){self.quickHelpTitle.frame=NSMakeRect(w*0.63+24,h*0.715-62,w*0.33-48,38);self.quickHelpText.frame=NSMakeRect(w*0.63+24,h*0.24+24,w*0.33-48,MAX(50,h*0.475-126));
+  self.quickStatus.frame=NSMakeRect(x+18,h*0.165,bw-18,18);}   // under the rows, above the lower divider
+ else{self.quickHelpTitle.frame=NSMakeRect(x,111,bw,24);self.quickHelpText.frame=NSMakeRect(x,71,bw,40);self.quickStatus.frame=NSMakeRect(x,48,bw,18);}
+ self.quickHelpTitle.font=quickFont(wide?24:15);self.quickHelpText.font=quickFont(wide?16:12);self.quickStatus.font=quickFont(wide?12:11);
  self.quickReturn.frame=NSMakeRect(w-202,15,180,32);self.quickNote.frame=NSMakeRect(x,22,MAX(40,w-250-x),20);
+}
+static NSString *quick_saved_note(BOOL ok){
+ if(!ok||(settings_quick_saving&&settings_quick_saving()<0))return @(TOTK_UI("已应用，但未能保存设置","Applied; settings could not be saved"));
+ return settings_quick_saving&&settings_quick_saving()>0?@(TOTK_UI("已应用并保存","Applied and saved")):@(TOTK_UI("已应用 · 仅本次会话","Applied · This session only"));
 }
 -(void)quickPreset:(NSButton *)sender{
  BOOL ok=settings_quick_apply&&settings_quick_apply(100+(int)sender.tag);
- self.quickNote.stringValue=ok?@(TOTK_UI("预设已应用 · 部分选项需重启","Preset applied · Some options require restart")):@(TOTK_UI("已应用，但未能保存设置","Applied; settings could not be saved"));[self refresh];
+ self.quickNote.stringValue=ok?@(TOTK_UI("预设已应用 · 部分选项需重启","Preset applied · Some options require restart")):quick_saved_note(NO);[self refresh];
 }
 -(void)quickAction:(NSButton *)sender{
  [self focusQuickRow:sender];int direction=(int)((TOTKQuickRow *)sender).direction;if(!direction)direction=1;
- if(sender.tag==22||sender.tag==26||!settings_quick_apply){int count=direction<0&&sender.tag==22?GAMEPAD_TYPE_COUNT-1:1;for(int i=0;i<count;i++){runtime_input_key_synthetic((unsigned)sender.tag,1);runtime_input_key_synthetic((unsigned)sender.tag,0);}}
- else{BOOL ok=settings_quick_step?settings_quick_step((int)sender.tag,direction):settings_quick_apply((int)sender.tag);
-  self.quickNote.stringValue=ok?(getenv("TOTK_SETTINGS")&&*getenv("TOTK_SETTINGS")?@(TOTK_UI("已应用并保存","Applied and saved")):@(TOTK_UI("已应用 · 仅本次会话","Applied · This session only"))):@(TOTK_UI("已应用，但未能保存设置","Applied; settings could not be saved"));}
- [self refresh];[self.window makeFirstResponder:self.window.contentView];
+ if(sender.tag==QUICK_CHANNEL){BOOL ok=quickChannelStep(direction);
+  self.quickNote.stringValue=ok?[NSString stringWithFormat:@(TOTK_UI("下一个问题起先用 %@","From the next question: %@ first")),quickChannelLabel(quickChannel())]:@(TOTK_UI("没能改写 assistant.json","Could not write assistant.json"));}
+ else if(sender.tag==22||sender.tag==26||!settings_quick_step){int count=direction<0&&sender.tag==22?GAMEPAD_TYPE_COUNT-1:1;for(int i=0;i<count;i++){runtime_input_key_synthetic((unsigned)sender.tag,1);runtime_input_key_synthetic((unsigned)sender.tag,0);}}
+ else self.quickNote.stringValue=quick_saved_note(settings_quick_step((int)sender.tag,direction));
+ [self refresh];if(sender.tag==QUICK_CHANNEL)[self focusQuickRow:sender];[self.window makeFirstResponder:self.window.contentView];
 }
--(void)quickSettings:(id)sender{(void)sender;if(settings_quick_open)settings_quick_open();}
 -(void)quickHint:(id)sender{(void)sender;NSEvent *e=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:self.window.windowNumber context:nil characters:@"8" charactersIgnoringModifiers:@"8" isARepeat:NO keyCode:28];totk_hint_key(e,YES);}
+/* What a row shows for a setting this file reads itself (keys 6 and 7, the AI channel); the others come from
+   settings_quick_value. */
+-(NSString *)quickValue:(TOTKQuickRow *)row flags:(int *)flags{
+ *flags=SETTINGS_ROW_ENABLED;
+ if(row.tag==22)return pad_type_text();
+ if(row.tag==26){if(runtime_mouse_enabled())*flags|=SETTINGS_ROW_ON;return runtime_mouse_enabled()?@(TOTK_UI("开启 · 收起后生效","On · collapse to play")):@(TOTK_UI("关闭","Off"));}
+ if(row.tag==QUICK_CHANNEL)return quickChannelLabel(quickChannel());
+ const char *value=settings_quick_value?settings_quick_value((int)row.tag,flags):NULL;
+ if(!value){*flags=0;return @"--";}
+ return @(value);
+}
 -(void)refreshQuickMenu {
  BOOL full=fps_overlay_full_hud();quickMenuOpen=full&&!self.hidden;
  if(runtime_settings_pause)runtime_settings_pause(quickMenuOpen&&(!bootOverlay||bootOverlay.hidden));
@@ -200,12 +317,13 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  }
  self.collapseButton.contentTintColor=quickInk();
  self.quickTitle.hidden=self.quickScroll.hidden=self.quickNote.hidden=self.quickTabs.hidden=self.quickHelpTitle.hidden=self.quickHelpText.hidden=self.quickReturn.hidden=self.quickBackdrop.hidden=!full;
+ self.quickStatus.hidden=!full||self.quickTab!=0;
  self.label.hidden=full;
  self.layer.backgroundColor=[NSColor colorWithCalibratedRed:0.04 green:0.045 blue:0.03 alpha:full?0.62:0].CGColor;
  self.quickBlur.hidden=!full;self.layer.cornerRadius=0;self.layer.borderWidth=0;
  self.quickPresets.hidden=self.quickPresetLabel.hidden=self.quickTab!=0;
- self.quickHint.hidden=self.quickSettings.hidden=self.quickTab!=2;
- for(NSUInteger i=0;i<self.quickRows.count;i++)self.quickRows[i].hidden=self.quickTab!=(i<6?0:1);
+ self.quickHint.hidden=self.quickChannelList.hidden=self.quickTab!=2;
+ for(NSUInteger i=0;i<self.quickRows.count;i++)self.quickRows[i].hidden=quickSpecs[i].tab!=self.quickTab;
  for(NSButton *b in self.quickTabs.subviews){b.state=b.tag==self.quickTab?NSControlStateValueOn:NSControlStateValueOff;b.needsDisplay=YES;}
  int preset=settings_quick_preset?settings_quick_preset():-1;
  for(NSButton *b in self.quickPresets.subviews){b.state=b.tag==preset?NSControlStateValueOn:NSControlStateValueOff;b.needsDisplay=YES;}
@@ -225,17 +343,13 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
  NSMutableArray *details=[NSMutableArray arrayWithObject:fps];for(int i=1;i<4;i++){char t[128];int hl;if(hud_snapshot(i,t,sizeof t,&hl))[details addObject:@(t)];}self.label.toolTip=[details componentsJoinedByString:@"\n"];
  self.textSize=NSMakeSize(0,16);
  if(full){
-  NSArray *names=@[@(TOTK_UI("帧率上限","Frame limit")),@(TOTK_UI("动态分辨率","Dynamic resolution")),@(TOTK_UI("补帧","Frame generation")),@(TOTK_UI("渲染分辨率","Render resolution")),@(TOTK_UI("画面比例","Aspect ratio")),@(TOTK_UI("边缘平滑","Edge smoothing")),@(TOTK_UI("手柄类型","Controller")),@(TOTK_UI("鼠标视角","Mouse camera"))];
-  for(NSUInteger i=0;i<self.quickRows.count;i++)self.quickRows[i].title=names[i];
-  int cap=nvn_fps_cap?nvn_fps_cap():0;
-  uint64_t size=runtime_output_size_current();unsigned w=(uint32_t)size,h=(uint32_t)(size>>32);
-  NSString *picture=mfxup_output_enabled()?@"MetalFX 2K":w==1920&&h==1080?@(TOTK_UI("标准","Standard")):[NSString stringWithFormat:@"%u × %u",w,h];
-  int mode=mfx_enabled();NSString *interp=mode==MFX_30?@"30 + 30":mode==MFX_HALF?@(TOTK_UI("半刷新率","Half refresh")):mode==MFX_MAX?@(TOTK_UI("不限帧","Unlimited")):@(TOTK_UI("关闭","Off"));
-  int aspect=runtime_aspect_step();float ratio=runtime_aspect_now();
-  NSString *wide=fabsf(ratio*9-21)<0.05f?@"21:9":[NSString stringWithFormat:@"%.2f:1",ratio];
-  NSArray *values=@[cap?[NSString stringWithFormat:@"%d FPS",cap]:@(TOTK_UI("不限帧","Unlimited")),runtime_drs_enabled&&runtime_drs_enabled()?@(TOTK_UI("开启","On")):@(TOTK_UI("关闭","Off")),interp,picture,aspect==1?@(TOTK_UI("适配窗口","Fit window")):aspect==2?wide:@"16:9",taa_enabled()?@(TOTK_UI("开启","On")):@(TOTK_UI("关闭","Off")),pad_type_text(),runtime_mouse_enabled()?@(TOTK_UI("开启 · 收起后生效","On · collapse to play")):@(TOTK_UI("关闭","Off"))];
-  for(NSUInteger i=0;i<self.quickRows.count;i++) {TOTKQuickRow *b=(TOTKQuickRow *)self.quickRows[i];b.value=values[i];b.on=i==1?(runtime_drs_enabled&&runtime_drs_enabled()):i==5?taa_enabled():i==7?runtime_mouse_enabled():NO;b.accessibilityLabel=[NSString stringWithFormat:@"%@：%@",b.title,b.value];b.needsDisplay=YES;}
-  self.quickRows[0].enabled=nvn_fps_cap&&settings_quick_apply;self.quickRows[1].enabled=runtime_drs_enabled&&settings_quick_apply;self.quickRows[4].enabled=aspect>=0;
+  for(NSUInteger i=0;i<self.quickRows.count;i++){TOTKQuickRow *b=(TOTKQuickRow *)self.quickRows[i];int flags=0;
+   b.title=@(TOTK_UI(quickSpecs[i].zh,quickSpecs[i].en));b.value=[self quickValue:b flags:&flags];
+   b.enabled=(flags&SETTINGS_ROW_ENABLED)!=0;b.on=(flags&SETTINGS_ROW_ON)!=0;
+   b.note=flags&SETTINGS_ROW_RESTART?@(TOTK_UI("重启后生效","after restart")):nil;
+   b.accessibilityLabel=[NSString stringWithFormat:@"%@：%@%@",b.title,b.value,b.note?[@" · " stringByAppendingString:b.note]:@""];b.needsDisplay=YES;}
+  if(self.quickTab==2)self.quickChannelList.stringValue=quickChannelList();
+  self.quickStatus.stringValue=settings_quick_status?[@(TOTK_UI("当前  ","Now  ")) stringByAppendingString:@(settings_quick_status())]:@"";
  }
  self.needsDisplay=YES;[self position];
 }
@@ -247,13 +361,13 @@ static BOOL quick_menu_key(NSEvent *e,BOOL down){
  if(!navigation)return NO;if(!down){runtime_input_key_synthetic(e.keyCode,0);return YES;}
  TOTKShortcutHelp *panel=(TOTKShortcutHelp *)shortcutHelp;if(!panel)return NO;
  if(e.keyCode==53){[panel toggleCollapsed:nil];return YES;}
- if(e.keyCode==48){NSInteger next=(panel.quickTab+((e.modifierFlags&NSEventModifierFlagShift)?2:1))%3;[panel quickTabAction:(id)panel.quickTabs.subviews[next]];return YES;}
- if(panel.quickTab==2){
-  if(e.keyCode>=123&&e.keyCode<=126){panel.quickFocused=panel.quickFocused==8?9:8;panel.quickHint.state=panel.quickFocused==8?NSControlStateValueOn:NSControlStateValueOff;panel.quickSettings.state=panel.quickFocused==9?NSControlStateValueOn:NSControlStateValueOff;panel.quickHint.needsDisplay=panel.quickSettings.needsDisplay=YES;}
-  else if(e.keyCode==36||e.keyCode==49){if(panel.quickFocused==9)[panel quickSettings:nil];else[panel quickHint:nil];}return YES;
- }
- NSArray *order=panel.quickTab==0?@[@0,@1,@3,@4,@5,@2]:@[@6,@7];NSUInteger i=[order indexOfObject:@(panel.quickFocused)];if(i==NSNotFound)i=0;
- if(e.keyCode==125||e.keyCode==126){i=(i+order.count+(e.keyCode==125?1:-1))%order.count;NSButton *row=panel.quickRows[[order[i] integerValue]];[panel focusQuickRow:row];[panel.quickBody scrollRectToVisible:row.frame];}
+ if(e.keyCode==48){NSInteger next=(panel.quickTab+((e.modifierFlags&NSEventModifierFlagShift)?2:1))%3;
+  for(NSButton *tab in panel.quickTabs.subviews)if(tab.tag==next)[panel quickTabAction:tab];return YES;}
+ NSArray<NSNumber *> *order=[panel quickOrder];NSUInteger i=[order indexOfObject:@(panel.quickFocused)];if(i==NSNotFound)i=0;
+ if(e.keyCode==125||e.keyCode==126){i=(i+order.count+(e.keyCode==125?1:-1))%order.count;NSInteger n=order[i].integerValue;
+  if(n==QUICK_HINT){[panel focusQuickHint];[panel.quickBody scrollRectToVisible:panel.quickHint.frame];}
+  else{NSButton *row=panel.quickRows[n];[panel focusQuickRow:row];[panel.quickBody scrollRectToVisible:row.frame];}}
+ else if(panel.quickFocused==QUICK_HINT){if(e.keyCode==36||e.keyCode==49)[panel quickHint:nil];}
  else{TOTKQuickRow *row=(id)panel.quickRows[panel.quickFocused];row.direction=e.keyCode==123?-1:1;if(row.enabled)[panel quickAction:row];row.direction=1;}
  return YES;
 }

@@ -5,6 +5,7 @@
 #include "../games/totk/third_party/d2r_gfx/gfx/nvn/fps_overlay.h"
 #include <assert.h>
 
+int dm_gfx_fps_now(int *generated) { if (generated) *generated = 0; return 60; }   /* the settings menu's "当前" line */
 static int settingsPause;
 void runtime_settings_pause(int paused){settingsPause=paused;}
 static int hintClicks;
@@ -127,18 +128,28 @@ int main(int argc, const char **argv) { @autoreleasepool {
         NSPoint buttonPoint=[panel convertPoint:NSMakePoint(NSMidX(panel.collapseButton.frame),NSMidY(panel.collapseButton.frame)) toView:host];
         assert([panel hitTest:buttonPoint]==panel.collapseButton);
         assert([panel hitTest:[panel convertPoint:NSMakePoint(8,8) toView:host]]!=nil);
-        assert(panel.quickRows.count==8);
+        /* Rows (quickSpecs): 0 cap 1 dynamic resolution 2 its lowest scale 3 render resolution 4 picture 5 edge smoothing
+           6 anisotropic filtering 7 interpolation 8 aspect | 9 controller 10 mouse | 11 AI channel. */
+        assert(panel.quickRows.count==12);
         assert(panel.quickTabs.subviews.count==3 && panel.quickTab==0);
-        for (NSUInteger i=0;i<8;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i>=6));
-        assert(panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickSettings.hiddenOrHasHiddenAncestor);
-        assert([panel.quickRows[3].title isEqualToString:@"渲染分辨率"]);
-        assert([((TOTKQuickRow *)panel.quickRows[2]).value isEqualToString:@"半刷新率"]);
+        for (NSUInteger i=0;i<12;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i>=9));
+        assert(panel.quickHint.hiddenOrHasHiddenAncestor && !panel.quickStatus.hiddenOrHasHiddenAncestor);
+        assert([panel.quickRows[3].title isEqualToString:@"渲染分辨率"] && [panel.quickRows[4].title isEqualToString:@"画面"]);
+        assert([((TOTKQuickRow *)panel.quickRows[4]).value isEqualToString:@"原生 2K"]);
+        assert([((TOTKQuickRow *)panel.quickRows[7]).value isEqualToString:@"刷新率一半"]);
+        assert(!panel.quickRows[2].enabled);   /* the lowest scale waits for dynamic resolution */
+        assert([((TOTKQuickRow *)panel.quickRows[6]).value isEqualToString:@"游戏自身"] && !((TOTKQuickRow *)panel.quickRows[6]).note);
+        [panel.quickRows[6] performClick:nil];tick();
+        assert([((TOTKQuickRow *)panel.quickRows[6]).value isEqualToString:@"2×"] && [((TOTKQuickRow *)panel.quickRows[6]).note isEqualToString:@"重启后生效"]);
+        ((TOTKQuickRow *)panel.quickRows[6]).direction=-1;[panel.quickRows[6] performClick:nil];((TOTKQuickRow *)panel.quickRows[6]).direction=1;tick();
+        assert(!((TOTKQuickRow *)panel.quickRows[6]).note);   /* back to what this run started with */
+        assert([panel.quickStatus.stringValue containsString:@"60 FPS"] && [panel.quickStatus.stringValue containsString:@"2560×1440"]);
         int before=taa_enabled();[panel.quickRows[5] performClick:nil];tick();
         assert(taa_enabled()!=before);
         assert(panel.quickFocused==5);
-        ((TOTKQuickRow *)panel.quickRows[2]).hovered=YES;
+        ((TOTKQuickRow *)panel.quickRows[7]).hovered=YES;
         [panel focusQuickRow:panel.quickRows[5]];
-        assert(!((TOTKQuickRow *)panel.quickRows[2]).hovered);
+        assert(!((TOTKQuickRow *)panel.quickRows[7]).hovered);
         assert([panel.quickHelpTitle.stringValue isEqualToString:panel.quickRows[5].title]);
         assert(panel.quickHelpText.stringValue.length>0);
         NSString *taaHelp=[panel.quickHelpText.stringValue copy];
@@ -147,18 +158,37 @@ int main(int argc, const char **argv) { @autoreleasepool {
         [panel.quickRows[5] performClick:nil];tick();assert(taa_enabled()==before);
         NSButton *controlsTab=(NSButton *)[panel.quickTabs viewWithTag:1];
         [controlsTab performClick:nil];tick();assert(panel.quickTab==1);
-        for (NSUInteger i=0;i<8;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i<6));
-        assert(panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickSettings.hiddenOrHasHiddenAncestor);
-        int padBefore=fakePadType;[panel.quickRows[6] performClick:nil];tick();assert(fakePadType==gamepad_type_next(padBefore));
-        int mouseBefore=fakeMouse;[panel.quickRows[7] performClick:nil];tick();assert(fakeMouse!=mouseBefore);
-        assert(panel.quickFocused==7);
-        assert([panel.quickHelpTitle.stringValue isEqualToString:panel.quickRows[7].title]);
+        for (NSUInteger i=0;i<12;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=9&&i!=10));
+        assert(panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickStatus.hiddenOrHasHiddenAncestor);
+        int padBefore=fakePadType;[panel.quickRows[9] performClick:nil];tick();assert(fakePadType==gamepad_type_next(padBefore));
+        int mouseBefore=fakeMouse;[panel.quickRows[10] performClick:nil];tick();assert(fakeMouse!=mouseBefore);
+        assert(panel.quickFocused==10);
+        assert([panel.quickHelpTitle.stringValue isEqualToString:panel.quickRows[10].title]);
         assert(panel.quickHelpText.stringValue.length>0 && ![panel.quickHelpText.stringValue isEqualToString:taaHelp]);
         NSButton *assistantTab=(NSButton *)[panel.quickTabs viewWithTag:2];
         [assistantTab performClick:nil];tick();assert(panel.quickTab==2);
-        for (NSButton *row in panel.quickRows) assert(row.hiddenOrHasHiddenAncestor);
-        assert(!panel.quickHint.hiddenOrHasHiddenAncestor && !panel.quickSettings.hiddenOrHasHiddenAncestor);
+        for (NSUInteger i=0;i<12;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=11));
+        assert(!panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickFocused==QUICK_HINT);
         assert(quickMenuOpen);[panel.quickHint performClick:nil];assert(hintClicks==1);
+        /* The AI channel: assistant.json "channel", everything else in the file kept; both directions wrap. */
+        NSString *assistant=quickAssistantPath(@"assistant.json");
+        assert([@"{\"enabled\": true, \"agent\": {\"provider\": \"gemini\", \"model\": \"gemini-4-argon\"}}" writeToFile:assistant atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+        tick();TOTKQuickRow *channel=(TOTKQuickRow *)panel.quickRows[11];
+        assert([channel.value isEqualToString:@"自动"] && channel.enabled);
+        [channel performClick:nil];tick();
+        assert([quickChannel() isEqualToString:@"claude-code"] && [channel.value isEqualToString:@"Claude Code"]);
+        assert([quickJSONFile(assistant)[@"enabled"] boolValue] && [quickJSONFile(assistant)[@"agent"][@"model"] isEqualToString:@"gemini-4-argon"]);
+        [channel performClick:nil];tick();assert([channel.value isEqualToString:@"Gemini 4"]);
+        assert(panel.quickFocused==11 && [panel.quickChannelList.stringValue containsString:@"打开一次卡关助手后"] && !panel.quickChannelList.hiddenOrHasHiddenAncestor);
+        assert([@"{\"backends\": {\"agent\": {\"ok\": true, \"label\": \"Gemini 4\"}, \"codex\": {\"ok\": false, \"why\": \"没有安装\"}}}" writeToFile:quickAssistantPath(@"hint-backends.json") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+        tick();
+        assert([panel.quickChannelList.stringValue containsString:@"Gemini 4　可用 · 当前"] && [panel.quickChannelList.stringValue containsString:@"Codex　不可用：没有安装"]);
+        channel.direction=-1;[channel performClick:nil];channel.direction=1;[channel performClick:nil];   /* back, then forward again */
+        channel.direction=-1;[channel performClick:nil];[channel performClick:nil];channel.direction=1;tick();
+        assert([quickChannel() isEqualToString:@"auto"]);
+        channel.direction=-1;[channel performClick:nil];channel.direction=1;tick();assert([quickChannel() isEqualToString:@"vertex"]);
+        assert([@"{ broken" writeToFile:assistant atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+        [channel performClick:nil];assert([[NSString stringWithContentsOfFile:assistant encoding:NSUTF8StringEncoding error:nil] isEqualToString:@"{ broken"]);
         /* Find tag zero among children, since viewWithTag:0 can return the container. */
         NSButton *pictureTab=nil;
         for (NSButton *tab in panel.quickTabs.subviews) if(tab.tag==0)pictureTab=tab;
@@ -184,15 +214,20 @@ int main(int argc, const char **argv) { @autoreleasepool {
         [pictureTab performClick:nil];assert(panel.quickFocused==0);
         assert(menu_key(125,0,YES) && panel.quickFocused==1);
         assert(menu_key(125,0,NO) && panel.quickFocused==1);
-        assert(menu_key(125,0,YES) && panel.quickFocused==3);
+        assert(menu_key(125,0,YES) && panel.quickFocused==2);
         assert(menu_key(126,0,YES) && panel.quickFocused==1);
-        assert(menu_key(48,0,YES) && panel.quickTab==1 && panel.quickFocused==6);
+        assert(menu_key(126,0,YES) && menu_key(126,0,YES) && panel.quickFocused==8);   /* wraps to the last row */
+        assert(menu_key(125,0,YES) && panel.quickFocused==0);
+        assert(menu_key(48,0,YES) && panel.quickTab==1 && panel.quickFocused==9);
         int keyboardPad=fakePadType;
         assert(menu_key(124,0,YES) && fakePadType==gamepad_type_next(keyboardPad));
         assert(menu_key(123,0,YES) && fakePadType==keyboardPad);
-        assert(menu_key(125,0,YES) && panel.quickFocused==7);
-        assert(menu_key(125,0,YES) && panel.quickFocused==6);
-        assert(menu_key(48,0,YES) && panel.quickTab==2);
+        assert(menu_key(125,0,YES) && panel.quickFocused==10);
+        assert(menu_key(125,0,YES) && panel.quickFocused==9);
+        assert(menu_key(48,0,YES) && panel.quickTab==2 && panel.quickFocused==QUICK_HINT);
+        int clicks=hintClicks;assert(menu_key(36,0,YES) && hintClicks==clicks+1);
+        assert(menu_key(125,0,YES) && panel.quickFocused==11);
+        assert(menu_key(126,0,YES) && panel.quickFocused==QUICK_HINT);
         assert(menu_key(48,NSEventModifierFlagShift,YES) && panel.quickTab==1);
         assert(menu_key(48,NSEventModifierFlagShift,YES) && panel.quickTab==0);
         assert(!menu_key(48,NSEventModifierFlagCommand,YES) && panel.quickTab==0);

@@ -180,9 +180,9 @@ extern void fps_overlay_set_collapsed(int collapsed);
 @property(strong) NSMutableArray<NSButton *> *quickRows;
 @property(strong) NSTextField *quickTitle, *quickNote;
 @property(strong) NSView *quickPresets;
-@property(strong) NSButton *quickSettings, *quickHint, *quickReturn;
+@property(strong) NSButton *quickHint, *quickReturn;
 @property(strong) NSView *quickTabs;
-@property(strong) NSTextField *quickHelpTitle, *quickHelpText, *quickPresetLabel;
+@property(strong) NSTextField *quickHelpTitle, *quickHelpText, *quickPresetLabel, *quickStatus, *quickChannelList;
 @property(strong) NSView *quickBackdrop;
 @property(strong) NSView *quickDivider;
 @property(strong) NSVisualEffectView *quickBlur;
@@ -366,14 +366,30 @@ static void note_occlusion(const char *when){int v=(window.occlusionState&NSWind
 static TOTKWindowDelegate *windowDelegate;
 int runtime_front_window_visible(void){return atomic_load(&windowVisible);}
 void runtime_front_request_close(void){dispatch_async(dispatch_get_main_queue(), ^{[window performClose:nil];});}
-/* "设置…" (Command-,) at the top of the app menu: runtime/settings_panel.m; without it (the AppKit tests that include this
-   file) the app menu has no such item. */
-__attribute__((weak)) void settings_panel_menu(NSMenu *appMenu){(void)appMenu;}
+/* "设置…" (Command-,) at the top of the app menu opens the game's settings menu (quick_menu.inc), shown first when key 1
+   hid it; the legacy corner HUD (TOTK_HUD=corners) has no settings menu and no such item. */
+@interface TOTKSettingsItem:NSObject
+@end
+@implementation TOTKSettingsItem
+-(void)open:(id)sender{(void)sender;
+ TOTKShortcutHelp *panel=(TOTKShortcutHelp *)shortcutHelp;if(!panel)return;
+ if(!fps_overlay_hints_enabled())runtime_shortcut_help_toggle();   // key 1's off: back to all
+ dispatch_async(dispatch_get_main_queue(),^{if(!fps_overlay_full_hud())[panel toggleCollapsed:nil];[window makeKeyAndOrderFront:nil];});
+}
+@end
+static TOTKSettingsItem *settingsItem;
+static void front_settings_menu(NSMenu *appMenu){
+ if(!hud_compact())return;
+ settingsItem=[TOTKSettingsItem new];
+ NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:@(TOTK_UI("设置…","Settings…")) action:@selector(open:) keyEquivalent:@","];
+ item.keyEquivalentModifierMask=NSEventModifierFlagCommand;item.target=settingsItem;
+ [appMenu addItem:item];[appMenu addItem:NSMenuItem.separatorItem];
+}
 /* Use the window-close path, not terminate:, so Command-Q also waits for active saves. */
 static void front_install_menu(void){
  NSMenu *menu=[NSMenu new],*appMenu=[NSMenu new];
  NSMenuItem *appItem=[NSMenuItem new];appItem.submenu=appMenu;[menu addItem:appItem];
- settings_panel_menu(appMenu);
+ front_settings_menu(appMenu);
  NSMenuItem *quit=[[NSMenuItem alloc] initWithTitle:@(TOTK_UI("退出 " GAME_NAME,"Quit " GAME_NAME)) action:@selector(performClose:) keyEquivalent:@"q"];
  quit.keyEquivalentModifierMask=NSEventModifierFlagCommand;quit.target=window;
  [appMenu addItem:quit];front_menubar_fps_add(menu);NSApp.mainMenu=menu;

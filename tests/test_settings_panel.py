@@ -1,6 +1,6 @@
-"""The settings window (games/totk/runtime/settings_panel.m), built but never shown: tests/settings_panel_probe.m drives its
-controls against the production key 2 / 3 / 4 / 5 code, with and without the frame-rate cap and the resolution controller,
-writing settings.txt to a temporary folder or to nothing."""
+"""The settings behind the in-game settings menu (games/totk/runtime/settings_panel.m): tests/settings_panel_probe.m makes
+the menu's calls against the production key 2 / 3 / 4 / 5 code, with and without the frame-rate cap and the resolution
+controller, writing settings.txt to a temporary folder or to nothing."""
 from pathlib import Path
 import os
 import platform
@@ -11,14 +11,14 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-# The weak references the window makes (games/totk/Makefile SETTINGS_OPTIONAL); missing ones are NULL.
+# The weak references the settings make (games/totk/Makefile SETTINGS_OPTIONAL); missing ones are NULL.
 OPTIONAL = ['nvn_set_fps_cap', 'nvn_fps_cap', 'nvn_fps_cap_pacing', 'runtime_drs_set', 'runtime_drs_enabled', 'runtime_drs_scale', 'runtime_drs_min',
             'runtime_drs_set_min', 'runtime_drs_set_target_ms']
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'AppKit requires macOS')
 class SettingsPanel(unittest.TestCase):
-    def test_window(self):
+    def test_menu_model(self):
         compiler = shutil.which('clang')
         if not compiler:
             self.skipTest('clang is required')
@@ -54,7 +54,7 @@ class SettingsPanel(unittest.TestCase):
                             run = subprocess.run([str(executable), str(settings) if written else '-'], env=env,
                                                  capture_output=True, text=True, timeout=60)
                             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-                            self.assertIn('pass: settings window', run.stdout)
+                            self.assertIn('pass: settings menu model', run.stdout)
                             self.assertEqual(settings.exists(), written)
 
 

@@ -29,6 +29,7 @@ class ShortcutStatus(unittest.TestCase):
                            '-Wl,-undefined,dynamic_lookup', '-Wl,-dead_strip',
                            str(ROOT / 'tests/shortcut_status_probe.m'),
                            str(ROOT / 'tests/shortcut_output_fixture.c'),
+                           str(ROOT / 'games/totk/runtime/settings_panel.m'),
                            str(gfx / 'totk_mfx.m'), str(gfx / 'totk_mfx_up.m'), str(gfx / 'totk_taa.m'),
                            str(gfx / 'fps_overlay.c'),
                            '-framework', 'Cocoa', '-framework', 'Metal',
@@ -41,8 +42,10 @@ class ShortcutStatus(unittest.TestCase):
                 for layout in ('compact', 'corners'):
                     for overridden in (False, True):
                         with self.subTest(version=version, layout=layout, overridden=overridden):
-                            env = os.environ.copy()
-                            env.update(TOTK_UI_LANG='en', TOTK_HUD=layout,
+                            env = {k: v for k, v in os.environ.items() if k != 'TOTK_SETTINGS'}
+                            assistant = Path(directory) / f'assistant-{version or "base"}-{layout}-{overridden}'
+                            assistant.mkdir()
+                            env.update(TOTK_UI_LANG='en', TOTK_HUD=layout, TOTK_ASSISTANT_FOLDER=str(assistant),
                                        TOTK_MFX='interp' if overridden else '0',
                                        TOTK_MFX_OUTPUT='1' if overridden else '0',
                                        TOTK_MFX_UPSCALE='0', TOTK_TAA='0')

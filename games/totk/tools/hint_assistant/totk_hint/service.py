@@ -34,6 +34,7 @@ from .romfs import DATA_DIR
 
 REQUEST = 'hint-request.json'
 RESPONSE = 'hint-response.json'
+BACKENDS = 'hint-backends.json'   # which channels can answer, for the game's settings menu (辅助 › AI 渠道)
 MAX_HISTORY_TURNS = 12
 MAX_SESSIONS = 8
 MAX_QUESTION_CHARS = 2000
@@ -143,6 +144,39 @@ class Service:
         self.voice = voicemod.VoiceService(self.folder, config, log)
         self.memory = memorymod.Memory(self.folder / 'assistant-memory.json') \
             if (config.get('memory') or {}).get('enabled', True) else None
+        self.config_stamp = self._stamp()
+
+    def _stamp(self):
+        try:
+            return Path(self.config.get('_path') or '').stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def reload(self):
+        """assistant.json again when it changed (the settings menu's AI channel, an edit): the next question uses it."""
+        stamp = self._stamp()
+        if stamp == self.config_stamp or not self.config.get('_path'):
+            return False
+        self.config_stamp = stamp
+        try:
+            config = configmod.load(self.config['_path'])
+        except ValueError as e:
+            self.log(f'[hint] keeping the previous settings: {e}')
+            return False
+        self.config = config
+        self.log(f'[hint] settings reloaded (channel {config.get("channel")})')
+        return True
+
+    def write_backends(self):
+        """hint-backends.json: each channel's name as the menu shows it and whether it can answer here."""
+        config = self.config
+        try:
+            found = {name: {'ok': ok, 'why': why, 'label': backendmod.label(name, config)}
+                     for name, ok, why in backendmod.report(config)}
+            _write(self.folder / BACKENDS, {'time': time.time(), 'channel': config.get('channel', 'auto'),
+                                            'order': backendmod.order('auto', config), 'backends': found})
+        except Exception as e:   # the menu then says nothing about availability; answering is not affected
+            self.log(f'[hint] could not write {BACKENDS}: {e}')
 
     def respond(self, request, status, **fields):
         value = {'id': request.get('id'), 'session': request.get('session'), 'status': status, 'time': time.time()}
@@ -153,6 +187,8 @@ class Service:
             _write(self.folder / RESPONSE, value)
 
     def work(self, request, cancel):
+        if self.reload():
+            threading.Thread(target=self.write_backends, daemon=True).start()
         tier = request.get('tier') if request.get('tier') in (1, 2, 3) else self.config['tier_default']
         session = request.get('session') or request.get('id')
         question = request.get('question')
@@ -308,6 +344,7 @@ class Service:
             except OSError:
                 voice_stamp = None
             self.log(f'[hint] service ready (requests: {path}; parent pid {parent_pid or "-"})')
+            threading.Thread(target=self.write_backends, daemon=True).start()
             last_check = 0
             try:
                 while True:

@@ -1,5 +1,5 @@
 /* The player's settings (issue #288): ~/Library/Application Support/MacNativeGames/TOTK/settings.txt, or the file
-   TOTK_SETTINGS names. The settings window (runtime/settings_panel.m, Command-,) writes it at every change; app/launcher.m
+   TOTK_SETTINGS names. The in-game settings menu (runtime/settings_panel.m, quick_menu.inc; Command-,) writes it at every change; app/launcher.m
    checks it before the game starts (an alert names the first bad line, as for controls.txt) and turns it into the
    environment the runtime reads at start. A variable that is already in the environment (open --env) wins over its line.
    Same style as controls.txt: "key = value" lines, '#' starts a comment, names and words are case-insensitive, a later line
@@ -21,8 +21,8 @@
      interpolation  off | 30+30 | half | max: key 2                                              TOTK_MFX (0 interp30 interp interpmax)
      aspect         16:9 | fit | 21:9: key 4                                                     TOTK_ASPECT (0 display 21:9)
    output and picture describe one thing from two sides: native 2K is the 2K canvas without MetalFX, the other two modes
-   keep the 1080p canvas, so the window keeps them in step; in a file written by hand, 2k or native starts in native 2K.
-   render_res and aniso are read only at start; everything else the window also changes while the game runs.
+   keep the 1080p canvas, so the menu keeps them in step; in a file written by hand, 2k or native starts in native 2K.
+   render_res and aniso are read only at start; everything else the menu also changes while the game runs.
    Pure C: tests/test_settings_file.c covers the parser, the presets, the file the window writes and the environment. */
 #ifndef TOTK_SETTINGS_FILE_H
 #define TOTK_SETTINGS_FILE_H
@@ -255,7 +255,7 @@ static inline int settings_format(const Settings *s, char *out, size_t n) {
     char res[32];
     if (s->render_w && s->render_h) snprintf(res, sizeof res, "%ux%u", s->render_w, s->render_h); else snprintf(res, sizeof res, "0");
     return snprintf(out, n,
-        "# Tears of the Kingdom on the Mac: the game's settings window (Command-,) writes this file at every change and the app\n"
+        "# Tears of the Kingdom on the Mac: the game's settings menu (Command-,) writes this file at every change and the app\n"
         "# reads it before the game starts. key = value; '#' starts a comment. A variable given with open --env wins over its line.\n"
         "preset = %s\n"
         "fps_cap = %d          # 0 (no cap) or a frame rate: 30, 40, 60, 90, 120\n"
@@ -337,4 +337,6 @@ static inline const char *settings_setenv(const char *name, const char *value) {
     setenv(name, value, 0);
     return getenv(name);
 }
+/* The in-game settings menu's rows (runtime/settings_panel.m settings_quick_value): what a row's flags say. */
+enum { SETTINGS_ROW_ENABLED = 1, SETTINGS_ROW_ON = 2, SETTINGS_ROW_RESTART = 4 };
 #endif

@@ -1,5 +1,5 @@
 /* Stand-ins for the frame-rate cap and the dynamic resolution controller (other features), with the exact prototypes the
-   settings window declares weak (games/totk/runtime/settings_panel.m), for tests/settings_panel_probe.m, which counts. */
+   settings declare weak (games/totk/runtime/settings_panel.m), for tests/settings_panel_probe.m, which counts. */
 extern int probe_cap_calls, probe_drs_calls;
 extern float probe_drs_min, probe_drs_target;
 static int cap, drs;

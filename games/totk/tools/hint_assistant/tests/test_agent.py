@@ -2,6 +2,7 @@
 import base64
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -442,6 +443,50 @@ class VertexCredentialsTests(unittest.TestCase):
             ctx.workdir = self.dir / 'run'
             backend.run('s', 'p', ctx)
         self.assertEqual(seen['env']['GOOGLE_APPLICATION_CREDENTIALS'], str(self.path))
+
+
+class ChannelTests(unittest.TestCase):
+    """assistant.json "channel" (the game's settings menu, 辅助 › AI 渠道) and what the menu reads back."""
+
+    def test_channel_goes_first_and_keeps_the_rest(self):
+        cfg = copy.deepcopy(config.DEFAULTS)
+        self.assertEqual(backends.order('auto', cfg), list(config.BACKENDS))
+        cfg['channel'] = 'agent'
+        self.assertEqual(backends.order('auto', cfg), ['agent', 'claude-code', 'codex', 'vertex-claude-code', 'vertex'])
+        self.assertEqual(backends.order('codex', cfg), ['codex'])   # a request naming a backend still gets only that one
+        cfg['agent'].update(provider='gemini', model='gemini-4-argon')
+        self.assertEqual(backends.label('agent', cfg), 'Gemini 4')
+        cfg['agent'].update(provider='openai', model='qwen3.8:27b-mlx')
+        self.assertEqual(backends.label('agent', cfg), 'qwen3.8:27b-mlx')
+        self.assertEqual(backends.label('vertex', cfg), 'Claude（Vertex）')
+
+    def test_service_reloads_settings_and_reports_channels(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'assistant.json'
+            path.write_text(json.dumps({'enabled': True}))
+            svc = service.Service(config.load(path), folder, log=lambda line: None)
+            self.assertFalse(svc.reload())
+            path.write_text(json.dumps({'enabled': True, 'channel': 'codex'}))
+            os.utime(path, ns=(svc.config_stamp + 10**9, svc.config_stamp + 10**9))
+            self.assertTrue(svc.reload())
+            self.assertEqual(svc.config['channel'], 'codex')
+            path.write_text('{ broken')
+            os.utime(path, ns=(svc.config_stamp + 2 * 10**9, svc.config_stamp + 2 * 10**9))
+            self.assertFalse(svc.reload())
+            self.assertEqual(svc.config['channel'], 'codex')   # a file being edited keeps the last good settings
+            with patch.object(backends, 'report', return_value=[('claude-code', True, ''), ('codex', False, 'no codex')]):
+                svc.write_backends()
+            written = json.loads((Path(folder) / service.BACKENDS).read_text())
+            self.assertEqual(written['channel'], 'codex')
+            self.assertEqual(written['order'][0], 'codex')
+            self.assertEqual(written['backends']['codex'], {'ok': False, 'why': 'no codex', 'label': 'Codex'})
+
+    def test_config_checks_the_channel(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'assistant.json'
+            path.write_text(json.dumps({'channel': 'gemini'}))
+            with self.assertRaisesRegex(ValueError, 'channel'):
+                config.load(path)
 
 
 if __name__ == '__main__':
