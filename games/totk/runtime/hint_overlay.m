@@ -316,7 +316,7 @@ static void hintShowReady(void){
  hintWorking=hintDone=NO;hintSession=nil;hintPendingQuestion=nil;hintLastQuestion=nil;hintPointNext=NO;hintQuestion.stringValue=@"";[hintHistory removeAllObjects];
  hintShow(@"卡在哪里了？告诉我，或先看看进度提示。");
  hintTitle.stringValue=@"露珠";hintEnable.title=@"根据进度给提示";
- hintDisclosure.stringValue=@"游戏继续运行 · 收起面板随时接着玩；指路和指给我看会暂停游戏";
+ hintDisclosure.stringValue=@"游戏继续运行 · 收起面板随时接着玩；只有「指给我看」会暂停游戏";
  [hintPanel makeKeyWindow];[hintPanel makeFirstResponder:hintQuestion];
 }
 // Requests carry user intent only; the assistant chooses observations through tools.

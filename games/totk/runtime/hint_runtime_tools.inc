@@ -9,7 +9,7 @@ extern void runtime_input_key_synthetic(unsigned code,int down) __attribute__((w
 static NSString *runtimeSeen;
 static NSInteger runtimeHeld=-1;
 static NSUInteger runtimeActionGeneration;
-static BOOL runtimeRestorePause;
+static BOOL runtimeRestorePause;   // the panel held the game's pause when the press began (hintPauseHeld): put it back after
 static NSArray *runtimeSteps;          // the 30..1000 ms presses of one sequence, one after another
 static NSString *runtimeStepsID;
 static NSUInteger runtimeStepsIndex;
@@ -24,7 +24,7 @@ static NSDictionary *hintRuntimeState(void){
  NSMutableDictionary *s=[@{@"source":@"live_runtime",@"pid":@(getpid()),@"sample_time":@(NSDate.date.timeIntervalSince1970),
  @"player_present":@(present==1),@"world_state":@"unknown",
  @"note":@"Player objects may exist on the title screen; presence and position do not establish gameplay. Scene, health and live quests are unknown",
- @"assistant_paused":@(hintExpanded),@"action_active":@(hintRuntimeActive()),@"health":[NSNull null],@"quests":[NSNull null]} mutableCopy];
+ @"assistant_paused":@(hintPauseHeld),@"action_active":@(hintRuntimeActive()),@"health":[NSNull null],@"quests":[NSNull null]} mutableCopy];
  if(present==1)s[@"position"]=@[@(xyz[0]),@(xyz[1]),@(xyz[2])];
  // The player's facing, the camera and the actors within 150 m (world_survey.c, 1.4.3); the assistant names them.
  RuntimeScene scene;
@@ -89,7 +89,7 @@ static void hintRuntimeRelease(void){
  runtimeHeld=-1;
 }
 static void hintRuntimeRestore(void){
- if(runtimeRestorePause&&hintExpanded&&runtime_assistant_pause)runtime_assistant_pause(1);
+ if(runtimeRestorePause&&hintPauseHeld&&runtime_assistant_pause)runtime_assistant_pause(1);   // back to the pause the panel still holds
  runtimeRestorePause=NO;
 }
 static void hintRuntimeStop(void){
@@ -145,7 +145,7 @@ static void hintRuntimePoll(void){
   if(runtimeStepsID||runtimeHeld>=0){hintRuntimeReply(id,@"action_busy");return;}
   if(hintActionCount+steps.count>hintActionLimit){hintRuntimeReply(id,@"action_limit");return;}
   runtimeSteps=steps;runtimeStepsID=id;runtimeStepsIndex=0;
-  runtimeRestorePause=hintExpanded;if(runtimeRestorePause&&runtime_assistant_pause)runtime_assistant_pause(0);
+  runtimeRestorePause=hintPauseHeld;if(runtimeRestorePause&&runtime_assistant_pause)runtime_assistant_pause(0);
   hintSceneReady=NO;hintMarksHide();   // the game moves: the frame on screen is no longer the saved one
   hintRuntimeSequencePress();return;
  }
@@ -156,7 +156,7 @@ static void hintRuntimePoll(void){
  if(hintActionCount>=hintActionLimit){hintRuntimeReply(id,@"action_limit");return;}
  if(runtimeHeld>=0||runtimeStepsID){hintRuntimeReply(id,@"action_busy");return;}
  hintActionCount++;
- runtimeRestorePause=hintExpanded;if(runtimeRestorePause&&runtime_assistant_pause)runtime_assistant_pause(0);
+ runtimeRestorePause=hintPauseHeld;if(runtimeRestorePause&&runtime_assistant_pause)runtime_assistant_pause(0);
  hintSceneReady=NO;hintMarksHide();
  runtimeHeld=code.integerValue;NSUInteger generation=++runtimeActionGeneration;
  runtime_input_key_synthetic((unsigned)runtimeHeld,1);

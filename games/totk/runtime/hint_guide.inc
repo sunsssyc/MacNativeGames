@@ -86,14 +86,16 @@ static void hintGuidePoll(void){
  NSDictionary *answer=hintJSON(hintPath(@"guide-response.json"));
  if(![answer[@"id"] isEqual:hintGuideID])return;
  hintGuideID=nil;
- NSDictionary *target=answer[@"target"];
- if(![answer[@"ok"] boolValue]||![target isKindOfClass:NSDictionary.class]||![target[@"xyz"] isKindOfClass:NSArray.class]){
+ NSDictionary *target=answer[@"target"];NSArray *xyz=[target isKindOfClass:NSDictionary.class]?target[@"xyz"]:nil;
+ BOOL usable=[xyz isKindOfClass:NSArray.class]&&xyz.count==3;   // three numbers; null anywhere (a save without Link's place) is not
+ for(id v in usable?xyz:@[])if(![v isKindOfClass:NSNumber.class])usable=NO;
+ if(![answer[@"ok"] boolValue]||!usable){
   hintDisclosure.stringValue=[answer[@"error"] isKindOfClass:NSString.class]?answer[@"error"]
    :@"没有找到可以指路的目标 · 换一个任务或先推进剧情";
   return;
  }
- hintGuideTarget=target[@"xyz"];hintGuideLabel=target[@"name"];
- hintGuideDistance=[target[@"distance_m"] doubleValue];
+ hintGuideTarget=xyz;hintGuideLabel=[target[@"name"] isKindOfClass:NSString.class]?target[@"name"]:nil;
+ hintGuideDistance=[target[@"distance_m"] isKindOfClass:NSNumber.class]?[target[@"distance_m"] doubleValue]:0;   // the next tick measures it
  hintGuideExpiry=[NSDate dateWithTimeIntervalSinceNow:900];   // 15 minutes, then the arrow steps out of the way
  hintGuideLayout();
  hintDisclosure.stringValue=@"已指路 · 收起面板，跟着箭头走";
@@ -118,7 +120,7 @@ static void hintGuideTick(void){
   double fx=-cam[2],fz=-cam[8],tx=pos[0]-campos[0],tz=pos[2]-campos[2];
   if(fx*tx+fz*tz<0){fx=-fx;fz=-fz;}
   facing=hintGuideHeading(fx,fz);
- }else facing=hintGuideHeading(rot[2],-rot[8]);   // no camera: Link's own facing
+ }else facing=hintGuideHeading(rot[2],rot[8]);   // no camera: Link's own facing, the third column (harness.heading_of)
  hintGuideAngle=fmod(bearing-facing+540,360)-180;
  hintGuidePanel.contentView.needsDisplay=YES;
 }

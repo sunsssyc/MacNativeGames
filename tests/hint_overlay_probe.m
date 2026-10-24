@@ -13,12 +13,12 @@ int runtime_live_scene(RuntimeScene *out,float radius){
 }
 // The camera and player rotations for the guide arrow's fast path: level, facing north (-Z). cameraConvention picks
 // which way the game stores the camera's forward axis; the arrow must come out the same either way.
-static int cameraConvention;
+static int cameraConvention,cameraMissing;   // cameraMissing: only Link's rotation, the arrow's fallback
 int runtime_live_facing(float player_rot[9],float camera_rot[9],float camera_pos[3]){
  player_rot[0]=player_rot[4]=1;player_rot[8]=-1;
  camera_rot[0]=camera_rot[4]=1;camera_rot[8]=cameraConvention?1:-1;   // the sign is settled by the position below
  camera_pos[0]=1;camera_pos[1]=2;camera_pos[2]=3+8;   // eight metres behind Link (south of him), so it looks north
- return 3;
+ return cameraMissing?1:3;
 }
 static unsigned syntheticDowns;static int syntheticHeld=-1;
 void runtime_input_key_synthetic(unsigned code,int down){if(down){syntheticDowns++;syntheticHeld=(int)code;}else if(syntheticHeld==(int)code)syntheticHeld=-1;}
@@ -344,6 +344,21 @@ int main(int argc,const char **argv){@autoreleasepool{
  assert([runtimeSequence(@"seq-budget",@[@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@0},@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@0},@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@0}])[@"ok"] boolValue]);
  assert([runtimeSequence(@"seq-budget-over",two)[@"error"] isEqual:@"action_limit"]);
  hintWorking=NO;hintActionsGranted=NO;
+ // A press with the panel open and the game running leaves it running, after the press and after closing (it paused
+ // the game after the press, and closing never released it: the panel held no pause of its own).
+ [@"{\"enabled\":true,\"allow_actions\":true}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ [hintActions close:nil];hintOpen();assert(!assistantPaused&&!hintPauseHeld&&![hintRuntimeState()[@"assistant_paused"] boolValue]);
+ hintWorking=YES;hintActionsGranted=YES;hintActionCount=0;hintID=@"running-press";
+ assert(runtimePress(@"running-1")==nil);[[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+ assert(!hintRuntimeActive()&&!assistantPaused);
+ hintWorking=NO;hintActionsGranted=NO;[hintActions close:nil];assert(!assistantPaused);
+ // With the panel holding the pause (指给我看), a press lets the game move and the pause comes back after it.
+ hintOpen();hintPause();[[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.8]];
+ assert(hintPauseHeld&&assistantPaused&&[hintRuntimeState()[@"assistant_paused"] boolValue]);
+ hintWorking=YES;hintActionsGranted=YES;hintActionCount=0;hintID=@"paused-press";
+ assert(runtimePress(@"paused-1")==nil&&!assistantPaused);[[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+ assert(assistantPaused);
+ hintWorking=NO;hintActionsGranted=NO;[hintActions close:nil];assert(!assistantPaused&&!hintPauseHeld);
  // 指路: the service's answer (no model) becomes an arrow that turns with the camera and leaves when Link is close.
  [@"{\"enabled\":true}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
  hintService=[FakeHintTask new];hintGuideHide();[hintActions guide:nil];
@@ -357,7 +372,13 @@ int main(int argc,const char **argv){@autoreleasepool{
  assert(fabs(hintGuideDistance-303)<6);assert(fabs(hintGuideAngle)<1);   // straight ahead of the camera
  cameraConvention=1;hintGuideTick();assert(fabs(hintGuideAngle)<1);   // the other axis convention reads the same
  cameraConvention=0;
+ cameraMissing=1;hintGuideTick();assert(fabs(hintGuideAngle)<1);cameraMissing=0;   // no camera: Link faces north too, so ahead (it read south)
  hintGuideHide();assert(!hintGuidePanel.visible);
+ // A target without Link's place in the save: no distance or name (null), still an arrow; null in its position: none.
+ [hintActions guide:nil];guideReply(@{@"name":NSNull.null,@"xyz":@[@0,@0,@(-300)],@"distance_m":NSNull.null});
+ assert(hintGuidePanel.visible&&!hintGuideLabel);hintGuideTick();assert(fabs(hintGuideDistance-303)<6);hintGuideHide();
+ [hintActions guide:nil];guideReply(@{@"name":@"坏",@"xyz":@[@0,NSNull.null,@(-300)],@"distance_m":@300});
+ assert(!hintGuidePanel.visible&&[hintDisclosure.stringValue containsString:@"没有找到"]);
  [hintActions guide:nil];guideAsk=hintJSON(hintPath(@"guide-request.json"));
  guideReply(@{@"name":@"脚下",@"xyz":@[@1,@2,@8],@"distance_m":@5});
  assert(hintGuidePanel.visible);hintGuideTick();assert(!hintGuidePanel.visible);   // close enough: the arrow leaves
