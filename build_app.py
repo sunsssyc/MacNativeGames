@@ -1251,10 +1251,13 @@ def keep_game_data(new, old, *, verify=app_seal_valid):
     return kept
 
 
-def sign_app(app, logs):
+def sign_app(app, logs, identity='-'):
     # Seal the bundle, including Info.plist and game resources. Copied helper
     # executables keep their existing signatures and byte identity. Checked once by install_app.
-    run(['codesign', '--force', '--sign', '-', app], logs / 'sign-app.log')
+    # identity: ad hoc (-) by default. A certificate (--sign-identity) gives the app a designated requirement that stays
+    # the same from one build to the next, so macOS keeps what the player allowed it (microphone, speech recognition):
+    # an ad hoc app's requirement is its CDHash, a new app to macOS at every build.
+    run(['codesign', '--force', '--sign', identity, app], logs / 'sign-app.log')
 
 
 def remove_in_background(path):
@@ -1295,7 +1298,7 @@ def install_app(new, out, *, verify=None, remove=None):
     return kept
 
 
-def step_app(tree, out, logs, *, version="v0", game='totk', data_outside=None):
+def step_app(tree, out, logs, *, version="v0", game='totk', data_outside=None, identity='-'):
     expected = VERSIONS[version]
     app_name, bundle_id, executable = APPS[game]
     tmp = out.with_name(out.name + '.partial')
@@ -1370,7 +1373,7 @@ def step_app(tree, out, logs, *, version="v0", game='totk', data_outside=None):
     import plistlib
     (tmp / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
     (tmp / 'Contents/PkgInfo').write_bytes(b'APPL????')
-    sign_app(tmp, logs)  # A failed seal must not remove the previous working app.
+    sign_app(tmp, logs, identity)  # A failed seal must not remove the previous working app.
     old_binary = out/'Contents/Resources/totk/build/totk-native'
     notified = 0
     while old_binary.is_file():
@@ -1774,6 +1777,9 @@ def parse_args(argv):
     ap.add_argument('-k', '--keys', type=Path, required=True, help='your prod.keys')
     ap.add_argument('-o', '--out', type=Path, help=f'the app or IPA to write (default depends on --platform; next to the game file)')
     ap.add_argument('--work', type=Path, help='work folder (default: TOTK_build next to the game file)')
+    ap.add_argument('--sign-identity', default='-', metavar='NAME',
+                    help='macOS: sign the app with this code-signing certificate (security find-identity -v -p codesigning) '
+                         'instead of ad hoc, so macOS keeps the microphone and speech permissions from one build to the next')
     ap.add_argument('--game-data-outside', type=Path, metavar='FOLDER',
                     help='Tears of the Kingdom on the Mac, for development builds: keep the 16 GB game data in FOLDER, shared '
                          'by every app built with it, instead of inside the app, so macOS checks a new app in seconds '
@@ -1970,7 +1976,7 @@ def main(argv):
             except BuildError as e:
                 say(f'   the Mac reminder for iPhone / iPad shader contributions was not installed: {e}')
     else:
-        step_app(tree, out, logs, version=version, data_outside=args.game_data_outside)
+        step_app(tree, out, logs, version=version, data_outside=args.game_data_outside, identity=args.sign_identity)
     # Refresh an existing app's version, executable and signing identity before
     # the next Finder launch; the desktop alias keeps pointing to this bundle.
     if args.platform=='macos': run([LSREGISTER, '-f', out], logs / 'register-app.log')

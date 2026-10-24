@@ -194,7 +194,9 @@ static void quickText(NSString *text,NSRect r,CGFloat size,NSColor *ink,NSTextAl
   quickText(@(TOTK_UI("开启","On")),NSMakeRect(choice.origin.x,(h-font-5)/2,half,font+7),font,self.on?ink:[ink colorWithAlphaComponent:0.5],NSTextAlignmentCenter);
   quickText(@(TOTK_UI("关闭","Off")),NSMakeRect(choice.origin.x+half,(h-font-5)/2,half,font+7),font,!self.on?ink:[ink colorWithAlphaComponent:0.5],NSTextAlignmentCenter);
  }else{
-  if(hot){[quickAccent() setFill];[[NSBezierPath bezierPathWithRoundedRect:choice xRadius:2 yRadius:2] fill];}
+  // A dropdown's value is a choice made, shown like a switch's selected half: always in the accent colour (the gold edge
+  // below marks focus); a stepped value lights up only while it has focus.
+  if(hot||self.dropdown){[[quickAccent() colorWithAlphaComponent:self.enabled?1:0.25] setFill];[[NSBezierPath bezierPathWithRoundedRect:choice xRadius:2 yRadius:2] fill];}
   quickText(self.value?:@"",NSMakeRect(split+27,(h-font-5)/2,w-split-58,font+7),font,ink,NSTextAlignmentCenter);
   if(self.dropdown){CGFloat x=NSMaxX(box)-16,y=h/2;NSBezierPath *caret=[NSBezierPath bezierPath];   // ▾: the choices open below
    CGFloat down=self.isFlipped?1:-1;   // a button draws flipped: +y is down
