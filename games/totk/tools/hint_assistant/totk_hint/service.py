@@ -8,6 +8,7 @@ and shows hint-response.json:
     {"id": 7, "session": 6, "tier": 1, "status": "working"|"done"|"error"|"cancelled", "text": "...",
      "backend": "claude-code", "seconds": 12.3, "next_tier": 2, "limit": 150}
 "limit" is the request's time budget in seconds (total_timeout_seconds); the game stops waiting a little after it.
+While working, "stage" says what the model is doing ("正在看任务日志") and "partial" is the answer written so far.
 A session is one stuck moment: its later tiers see the earlier answers and go one step further."""
 import fcntl
 import json
@@ -29,13 +30,17 @@ RESPONSE = 'hint-response.json'
 MAX_HISTORY_TURNS = 12
 MAX_SESSIONS = 8
 MAX_QUESTION_CHARS = 2000
+STAGES = {'game_state': '正在看存档', 'quest_log': '正在看任务日志', 'search_text': '正在查游戏文本',
+          'screenshot': '正在看画面', 'runtime_state': '正在看林克的位置', 'wait_state': '正在看林克的位置',
+          'press_button': '正在操作游戏', 'stop_action': '正在松开按键'}
 
 
 def hint(config, tier=None, backend='auto', question=None, previous=None, allow_screenshot=None, romfs=None,
-         save_root=None, cancel=None, progress=None, scene_image=None, allow_actions=False):
+         save_root=None, cancel=None, progress=None, scene_image=None, allow_actions=False, on_event=None):
     """{"text", "tier", "backend", "model", "seconds", "attempts"}; raises BackendError when no backend answers.
     Each backend gets timeout_seconds, all of them together total_timeout_seconds. allow_actions offers the input tools
-    (the caller checks assistant.json allow_actions and the player's consent for this request)."""
+    (the caller checks assistant.json allow_actions and the player's consent for this request). on_event gets the
+    backend's progress: ('tool', name) and ('text', the answer so far)."""
     if cancel is not None and cancel.is_set():
         raise backendmod.Cancelled()
     tier = tier if tier in (1, 2, 3) else config['tier_default']
@@ -62,7 +67,7 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
         if progress:
             progress(name)
         ctx = backendmod.Context(config, shots, romfs, save_root, cancel, min(config['timeout_seconds'], remaining),
-                                 allow_actions)
+                                 allow_actions, on_event)
         ctx.scene_image = scene_image
         try:
             answer = b.run(SYSTEM, prompt, ctx)
@@ -128,12 +133,47 @@ class Service:
         # Input tools only when assistant.json allows them and the player allowed this question in the panel.
         actions = bool(self.config.get('allow_actions')) and request.get('actions') is True and bool(question)
         limit = self.config['total_timeout_seconds']
-        self.respond(request, 'working', tier=tier, text='正在思考……', next_tier=None, limit=limit)
+        shown = {'backend': None, 'stage': '正在思考', 'partial': '', 'written': 0.0, 'timer': None, 'finished': False}
+        shown_lock = threading.Lock()
+
+        def write():
+            with shown_lock:
+                shown['timer'] = None
+                if shown['finished']:
+                    return   # a late progress write must never cover the answer
+                shown['written'] = time.monotonic()
+                self.respond(request, 'working', tier=tier, backend=shown['backend'], text='正在思考……',
+                             stage=shown['stage'], partial=shown['partial'], next_tier=None, limit=limit)
+
+        def show(force=False):
+            # The answer arrives in many small pieces, often all within milliseconds: at most ten writes a second, and
+            # a skipped piece is written 0.1 s later, so the words on screen never wait for the run to end.
+            wait = shown['written'] + 0.1 - time.monotonic()
+            if force or wait <= 0:
+                write()
+            elif not shown['timer']:
+                shown['timer'] = threading.Timer(wait, write)
+                shown['timer'].daemon = True
+                shown['timer'].start()
+
+        def finish():
+            with shown_lock:
+                shown['finished'] = True
+                if shown['timer']:
+                    shown['timer'].cancel()
+        show(True)
 
         def progress(name):
-            title = backendmod.make(name, self.config).title
-            self.respond(request, 'working', tier=tier, backend=name, text=f'正在思考（{title}）……', next_tier=None,
-                         limit=limit)
+            shown.update(backend=name, stage='正在思考', partial='')
+            show(True)
+
+        def event(kind, value):
+            if kind == 'tool':
+                shown.update(stage=STAGES.get(value, '正在查资料'), partial='')
+                show(True)
+            elif kind == 'text' and clean(value) != shown['partial']:
+                shown.update(stage='正在回答', partial=clean(value))
+                show()
         t0 = time.monotonic()
         scene_image = None
         candidate = request.get('scene_image')
@@ -144,16 +184,19 @@ class Service:
         try:
             result = hint(self.config, tier, request.get('backend') or 'auto', question or None, previous,
                           request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image,
-                          allow_actions=actions)
+                          allow_actions=actions, on_event=event)
         except backendmod.Cancelled:
+            finish()
             self.log(f'[hint] request {request.get("id")} cancelled')
             self.respond(request, 'cancelled', tier=tier, text='', next_tier=None)
             return
         except Exception as e:   # the panel says what went wrong instead of waiting forever
+            finish()
             self.log(f'[hint] request {request.get("id")} failed: {e}')
             self.respond(request, 'error', tier=tier, text=f'这次没能给出提示：{e}'[:300], seconds=round(time.monotonic() - t0, 1),
                          next_tier=None)
             return
+        finish()
         if cancel.is_set():
             self.respond(request, 'cancelled', tier=tier, text='', next_tier=None)
             return

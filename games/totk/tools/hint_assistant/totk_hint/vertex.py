@@ -138,6 +138,7 @@ class VertexREST:
                     if block.get('type') != 'tool_use':
                         continue
                     calls += 1
+                    ctx.event('tool', block.get('name'))
                     try:
                         text, image = harness.call(block.get('name'), block.get('input') or {})
                         result = [{'type': 'text', 'text': text}]

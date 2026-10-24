@@ -4,7 +4,7 @@
    clone reads each page (tools/hint_assistant/totk_hint/voice.py); until then the macOS system voice does. Reading
    happens only behind the open panel, while the game is paused (the model shares the GPU), and stops when it closes. */
 static NSArray<NSString *> *hintPages;
-static NSString *hintPagedAnswer;
+static NSString *hintPagedAnswer;   // nil at each new request: the answer then starts on its first page
 static NSUInteger hintPage;
 static NSString *hintReadID;            // the reading request for the answer on screen
 static BOOL hintReadSystem;             // this answer is read by the system voice
@@ -47,10 +47,13 @@ static NSArray<NSString *> *hintPagesOf(NSString *text){
  return pages.count?pages:@[text];
 }
 static NSString *hintPageText(NSString *answer){   // the page on screen of answer, ▼ when more follow
- if(![answer isEqual:hintPagedAnswer]){hintPagedAnswer=answer;hintPages=hintPagesOf(answer);hintPage=0;}
+ if(![answer isEqual:hintPagedAnswer]){
+  if(!hintPagedAnswer)hintPage=0;   // the same answer growing as it is typed out keeps the page the player is on
+  hintPagedAnswer=answer;hintPages=hintPagesOf(answer);hintPage=MIN(hintPage,hintPages.count-1);
+ }
  return hintPage+1<hintPages.count?[hintPages[hintPage] stringByAppendingString:@"  ▼"]:hintPages[hintPage];
 }
-static BOOL hintPagesRemain(void){return hintDone&&!hintHistoryExpanded&&hintPage+1<hintPages.count;}
+static BOOL hintPagesRemain(void){return (hintDone||hintWorking)&&!hintHistoryExpanded&&hintPage+1<hintPages.count;}
 
 // reading -------------------------------------------------------------------------------------------------------------
 static AVSpeechSynthesisVoice *hintSystemVoice(void){

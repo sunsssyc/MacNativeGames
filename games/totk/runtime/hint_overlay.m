@@ -37,6 +37,12 @@ static BOOL hintRecording;
 static NSButton *hintVoiceSetup;
 static NSUInteger hintPage;
 static NSArray<NSString *> *hintPages;
+static NSString *hintPagedAnswer;
+/* While the model works: what it is doing (the service's "stage") and the answer written so far ("partial"), typed out at
+   a reading pace by hintReveal: the model hands its words over in one burst seconds before the run ends. */
+static NSString *hintStage, *hintPartial;
+static NSUInteger hintRevealed;
+static NSTimer *hintRevealTimer;
 
 static NSDictionary *hintRuntimeState(void);
 static void hintRuntimeStop(void);
@@ -223,15 +229,17 @@ static void hintShow(NSString *text) {
  hintTitle.hidden=hintDisclosure.hidden=hintBack.hidden=NO;
  hintTitle.stringValue=@"露珠";
  hintLatest=text;hintHistoryExpanded=NO;
- NSString *shown=hintDone&&!hintWorking?hintPageText(text):text;   // an answer three lines at a time
- hintText.stringValue=hintWorking?@"让我想想…":shown;
- hintBubble.stringValue=hintWorking?@"让我想想…\n点击头像展开 · Esc 取消":shown;
+ BOOL streaming=hintWorking&&hintRevealed>0;
+ // An answer shows three lines at a time, also while it is being typed out.
+ NSString *shown=streaming?hintPageText([hintPartial substringToIndex:hintRevealed]):hintDone&&!hintWorking?hintPageText(text):text;
+ hintText.stringValue=hintWorking&&!streaming?@"让我想想…":shown;
+ hintBubble.stringValue=hintWorking&&!streaming?@"让我想想…\n点击头像展开 · Esc 取消":shown;
  hintEnable.hidden=hintWorking;hintEnable.enabled=YES;hintEnable.action=@selector(request:);
  hintEnable.title=hintDone?(hintTier<3?@"更具体一点":@"新的求助"):@"重新求助";
  hintBack.title=hintWorking?@"取消求助  Esc":@"收起  Esc";
  hintDisclosure.stringValue=hintWorking&&hintRuntimeActive()?[NSString stringWithFormat:@"露珠正在操作游戏（第 %lu 次，最多 %lu 次）· Esc 中止",(unsigned long)hintActionCount,(unsigned long)hintActionLimit]
-  :hintWorking?[NSString stringWithFormat:@"已等待 %.0f 秒 · %.0f 秒后自动停止",MAX(0,-hintStarted.timeIntervalSinceNow),hintRequestLimit]
-  :hintDone&&hintPagesRemain()?[NSString stringWithFormat:@"第 %lu/%lu 段 · 回车或点击文字继续",(unsigned long)hintPage+1,(unsigned long)hintPages.count]
+  :hintPagesRemain()?[NSString stringWithFormat:@"第 %lu/%lu 段 · 回车或点击文字继续",(unsigned long)hintPage+1,(unsigned long)hintPages.count]
+  :hintWorking?[NSString stringWithFormat:@"%@… · 已等待 %.0f 秒（上限 %.0f 秒）",hintStage.length?hintStage:@"正在思考",MAX(0,-hintStarted.timeIntervalSinceNow),hintRequestLimit]
   :hintDone?@"可输入问题继续追问":@"本次求助已结束，不会自动重试。";
  hintProgress.hidden=!hintWorking;if(hintWorking)[hintProgress startAnimation:nil];else [hintProgress stopAnimation:nil];
  CGFloat bodyWidth=MIN(440,NSWidth(hintGame.frame)-40)-64;
@@ -336,6 +344,22 @@ static BOOL hintStart(void) {
 }
 
 #include "hint_runtime_tools.inc"
+static void hintRevealStop(void){[hintRevealTimer invalidate];hintRevealTimer=nil;}
+static void hintReveal(void){   // a few more characters of the answer being written, about 90 a second
+ if(!hintWorking||hintRevealed>=hintPartial.length){hintRevealStop();return;}
+ NSUInteger next=hintRevealed;
+ for(int i=0;i<3&&next<hintPartial.length;i++)next=NSMaxRange([hintPartial rangeOfComposedCharacterSequenceAtIndex:next]);
+ hintRevealed=next;hintShow(@"");
+}
+static void hintStream(NSDictionary *answer){   // the service's progress while working
+ NSString *stage=answer[@"stage"],*partial=answer[@"partial"];
+ hintStage=[stage isKindOfClass:NSString.class]?stage:nil;
+ if(![partial isKindOfClass:NSString.class])partial=@"";
+ if(![partial hasPrefix:[hintPartial?:@"" substringToIndex:MIN(hintRevealed,hintPartial.length)]])hintRevealed=0;   // a new attempt
+ hintPartial=partial;
+ if(hintRevealed<hintPartial.length&&!hintRevealTimer)
+  hintRevealTimer=[NSTimer scheduledTimerWithTimeInterval:1.0/30 repeats:YES block:^(NSTimer *timer){(void)timer;hintReveal();}];
+}
 static void hintPoll(void) {
  hintRuntimePoll();
  hintVoicePoll();
@@ -350,8 +374,9 @@ static void hintPoll(void) {
  if([answer[@"id"] isEqual:hintID]&&[answer[@"session"] isEqual:hintSession]){
   NSString *status=answer[@"status"],*text=answer[@"text"];
   if([answer[@"limit"] isKindOfClass:NSNumber.class])hintRequestLimit=MIN(900,MAX(30,[answer[@"limit"] doubleValue]+10));
-  if(![status isEqual:@"working"]){
-   hintWorking=NO;hintDone=[status isEqual:@"done"];hintActionsEnd();
+  if([status isEqual:@"working"])hintStream(answer);
+  else{
+   hintWorking=NO;hintDone=[status isEqual:@"done"];hintActionsEnd();hintRevealStop();
    hintText.toolTip=hintDone?nil:text;
    if(hintDone&&[text isKindOfClass:NSString.class]){[hintHistory addObject:[@"露珠\n" stringByAppendingString:text]];while(hintHistory.count>24)[hintHistory removeObjectAtIndex:0];}
    hintShow(hintDone&&[text isKindOfClass:NSString.class]?text:@"这次没能取得提示。\n你可以稍后重新求助。");
@@ -445,7 +470,7 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  if(!hintWrite(request)){
   hintShow(@"无法写入求助请求。");return YES;
  }
- hintReadStop();hintPagedAnswer=nil;
+ hintReadStop();hintPagedAnswer=nil;hintPages=nil;hintPage=0;hintPartial=hintStage=nil;hintRevealed=0;hintRevealStop();
  if(hintReadOn())hintVoiceWrite(@{@"id":NSUUID.UUID.UUIDString,@"warm":@YES});   // the voice loads while the model thinks
  if(hintPendingQuestion.length)[hintHistory addObject:[@"你\n" stringByAppendingString:hintPendingQuestion]];
  hintLastQuestion=hintPendingQuestion;hintPendingQuestion=nil;hintQuestion.stringValue=@"";[hintPanel makeFirstResponder:nil];[hintGame makeKeyWindow];

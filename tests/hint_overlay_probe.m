@@ -112,10 +112,10 @@ int main(int argc,const char **argv){@autoreleasepool{
  assert([hintText.stringValue isEqual:@"第四行\n第五行"]);assert(!hintPagesRemain());assert(!hintPageNext());
  NSEvent *ret=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:w.windowNumber context:nil characters:@"\r" charactersIgnoringModifiers:@"\r" isARepeat:NO keyCode:36];
  assert(!totk_hint_key(ret,YES));   // nothing left to show: Return is the game's again
- hintShow(@"新回答第一行\n二\n三\n四");assert(hintPage==0);assert(totk_hint_key(ret,YES));assert(hintPage==1);
+ hintPagedAnswer=nil;hintShow(@"新回答第一行\n二\n三\n四");assert(hintPage==0);   // a new request starts on page oneassert(totk_hint_key(ret,YES));assert(hintPage==1);
  // 朗读 is off by default; switching it on is remembered and, without the voice service, reads with the system voice.
  FakeSpeaker *speaker=[FakeSpeaker new];hintSpeaker=speaker;
- assert(!hintReadOn());hintService=nil;hintShow(answer);
+ assert(!hintReadOn());hintService=nil;hintPagedAnswer=nil;hintShow(answer);
  [hintActions read:nil];assert(hintReadOn());assert([hintJSON(path)[@"enabled"] boolValue]);
  assert(hintReadSystem);assert([speaker.said isEqual:@[@"第一行\n第二行\n第三行"]]);
  [hintActions speechSynthesizer:speaker didFinishSpeechUtterance:[AVSpeechUtterance speechUtteranceWithString:@""]];
@@ -123,12 +123,29 @@ int main(int argc,const char **argv){@autoreleasepool{
  assert(hintPage==1);assert([speaker.said.lastObject isEqual:@"第四行\n第五行"]);
  [hintActions read:nil];assert(!hintReadOn());assert(!speaker.talking);
  // With the service: reading asks it for the pages; "no_reference" falls back to the system voice and offers recording.
- hintService=[FakeHintTask new];hintShow(@"甲\n乙");[hintActions read:nil];
+ hintService=[FakeHintTask new];hintPagedAnswer=nil;hintShow(@"甲\n乙");[hintActions read:nil];
  NSDictionary *readRequest=hintJSON(hintPath(@"hint-voice-request.json"));assert([readRequest[@"pages"] isEqual:@[@"甲\n乙"]]);
  [[NSJSONSerialization dataWithJSONObject:@{@"id":readRequest[@"id"],@"status":@"no_reference"} options:0 error:nil] writeToFile:hintPath(@"hint-voice.json") atomically:YES];
  hintVoicePoll();assert(hintReadSystem);assert([speaker.said.lastObject isEqual:@"甲\n乙"]);
  assert(!hintVoiceSetup.hidden);assert([hintVoiceSetup.title isEqual:@"录我的声音"]);
  [hintActions close:nil];assert(!speaker.talking);
  [hintActions read:nil];assert(!hintReadOn());
+ // While the model works the panel says what it is doing, then types the answer out on its pages; the page the player
+ // turned to stays when the finished answer arrives.
+ NSString *responsePath=hintPath(@"hint-response.json");
+ void (^respond)(NSDictionary *)=^(NSDictionary *fields){NSMutableDictionary *r=[@{@"id":@"stream",@"session":@"s"} mutableCopy];[r addEntriesFromDictionary:fields];
+  [[NSJSONSerialization dataWithJSONObject:r options:0 error:nil] writeToFile:responsePath atomically:YES];};
+ hintOpen();hintID=@"stream";hintSession=@"s";hintWorking=YES;hintDone=NO;hintStarted=NSDate.date;
+ hintPagedAnswer=nil;hintPages=nil;hintPartial=nil;hintRevealed=0;
+ respond(@{@"status":@"working",@"stage":@"正在看任务日志",@"partial":@""});hintPoll();
+ assert([hintDisclosure.stringValue containsString:@"正在看任务日志"]);assert([hintText.stringValue isEqual:@"让我想想…"]);
+ respond(@{@"status":@"working",@"stage":@"正在回答",@"partial":@"第一行\n第二行\n第三行\n第四行"});hintPoll();
+ assert(hintRevealTimer);hintReveal();assert(hintRevealed==3&&[hintText.stringValue isEqual:@"第一行"]);
+ while(hintRevealed<hintPartial.length)hintReveal();
+ assert([hintText.stringValue isEqual:@"第一行\n第二行\n第三行  ▼"]);
+ assert(totk_hint_key(ret,YES));assert([hintText.stringValue isEqual:@"第四行"]);
+ respond(@{@"status":@"done",@"text":@"第一行\n第二行\n第三行\n第四行"});hintPoll();
+ assert(hintDone&&!hintWorking&&!hintRevealTimer);assert(hintPage==1&&[hintText.stringValue isEqual:@"第四行"]);
+ [hintActions close:nil];
  [hintTimer invalidate];[hintPanel orderOut:nil];puts("pass: enable preserves config, does not send request, rejects invalid config");
 }}

@@ -10,9 +10,11 @@
 import glob
 import json
 import os
+import queue
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -38,11 +40,12 @@ class Context:
     """What one hint run needs besides the prompt."""
 
     def __init__(self, config, allow_screenshot=False, romfs=None, save_root=None, cancel=None, timeout=None,
-                 allow_actions=False):
+                 allow_actions=False, on_event=None):
         self.config = config
         self.scene_image = None
         self.allow_screenshot = allow_screenshot
         self.allow_actions = allow_actions
+        self.on_event = on_event   # ('tool', tool name) when a tool starts; ('text', answer so far) as it is written
         self.romfs = romfs
         self.save_root = save_root
         self.cancel = cancel   # a threading.Event, or None
@@ -68,10 +71,22 @@ class Context:
         if self.cancel is not None and self.cancel.is_set():
             raise Cancelled()
 
+    def event(self, kind, value):
+        if self.on_event:
+            try:
+                self.on_event(kind, value)
+            except Exception:   # progress is cosmetic: it never fails the hint
+                pass
 
-def run_process(args, ctx, stdin_text='', env=None, cwd=None):
+
+def tool_name(name):
+    """game_state from mcp__totk-harness__game_state (Claude Code) or totk-harness.game_state."""
+    return str(name or '').replace('.', '__').split('__')[-1]
+
+
+def run_process(args, ctx, stdin_text='', env=None, cwd=None, on_line=None):
     """(exit status, stdout, stderr) of a command, stopped at ctx.timeout or when ctx.cancel is set (the whole process
-    group: the agent and the MCP server it started)."""
+    group: the agent and the MCP server it started). on_line gets each line of standard output as it is written."""
     ctx.check()
     try:
         p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
@@ -79,30 +94,58 @@ def run_process(args, ctx, stdin_text='', env=None, cwd=None):
     except OSError as e:
         raise BackendError(f'{args[0]} did not start: {e}') from None
     deadline = time.monotonic() + ctx.timeout
-    data = stdin_text.encode()
+    lines, out, err = queue.Queue(), [], []
+
+    def read(stream, into, forward):
+        for raw in stream:
+            into.append(raw)
+            if forward:
+                lines.put(raw.decode('utf-8', 'replace'))
+        stream.close()
+    readers = [threading.Thread(target=read, args=(p.stdout, out, True), daemon=True),
+               threading.Thread(target=read, args=(p.stderr, err, False), daemon=True)]
+    for r in readers:
+        r.start()
+    try:
+        p.stdin.write(stdin_text.encode())
+        p.stdin.close()
+    except OSError:   # it exited before reading its input: the exit status says why
+        pass
+    stop, exited = None, None
     while True:
         try:
-            out, err = p.communicate(data, timeout=0.5)
-            return p.returncode, out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
-        except subprocess.TimeoutExpired:
-            data = None
-            stop = 'cancelled' if ctx.cancel is not None and ctx.cancel.is_set() else 'timeout' if time.monotonic() > deadline else None
-            if not stop:
-                continue
-            for sig, wait in ((signal.SIGTERM, 3), (signal.SIGKILL, 3)):
-                try:
-                    os.killpg(p.pid, sig)
-                except ProcessLookupError:
-                    break
-                try:
-                    p.wait(wait)
-                    break
-                except subprocess.TimeoutExpired:
-                    pass
-            p.communicate()
-            if stop == 'cancelled':
-                raise Cancelled()
-            raise BackendError(f'{Path(args[0]).name} did not answer within {ctx.timeout:.0f} s')
+            line = lines.get(timeout=0.2)
+        except queue.Empty:
+            line = None
+        if line is not None and on_line:
+            on_line(line)
+        if p.poll() is not None:   # done once its output is read (a grandchild holding the pipe gets 2 s)
+            exited = exited or time.monotonic()
+            if lines.empty() and (not readers[0].is_alive() or time.monotonic() - exited > 2):
+                break
+            continue
+        stop = 'cancelled' if ctx.cancel is not None and ctx.cancel.is_set() else 'timeout' if time.monotonic() > deadline else None
+        if stop:
+            break
+    if stop:
+        for sig, wait in ((signal.SIGTERM, 3), (signal.SIGKILL, 3)):
+            try:
+                os.killpg(p.pid, sig)
+            except ProcessLookupError:
+                break
+            try:
+                p.wait(wait)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+    p.wait()
+    for r in readers:
+        r.join(2)
+    if stop == 'cancelled':
+        raise Cancelled()
+    if stop:
+        raise BackendError(f'{Path(args[0]).name} did not answer within {ctx.timeout:.0f} s')
+    return p.returncode, b''.join(out).decode('utf-8', 'replace'), b''.join(err).decode('utf-8', 'replace')
 
 
 def find_binary(name, configured=None, extra=()):
@@ -165,7 +208,9 @@ class ClaudeCode:
         mcp_file.write_text(json.dumps(mcp, ensure_ascii=False))
         tools = [f'mcp__totk-harness__{t}' for t in TOOLS + (ACTION_TOOLS if ctx.allow_actions else ())]
         builtin = ''
-        command = [binary, '-p', '--output-format', 'json', '--system-prompt', system, '--mcp-config', str(mcp_file),
+        # stream-json with partial messages: the answer is shown as it is written, tool calls as they start
+        command = [binary, '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+                   '--system-prompt', system, '--mcp-config', str(mcp_file),
                    '--strict-mcp-config', '--permission-mode', 'dontAsk', '--no-session-persistence',
                    '--setting-sources', 'project']
         if ctx.allow_screenshot:
@@ -193,11 +238,29 @@ class ClaudeCode:
             command += ['--model', model]
         if effort:
             command += ['--effort', effort]
-        code, out, err = run_process(command, ctx, prompt, env, str(ctx.workdir))
-        try:
-            result = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
-        except ValueError:
-            result = {}
+        stream = {'text': '', 'result': {}}
+
+        def line(raw):
+            try:
+                event = json.loads(raw)
+            except ValueError:
+                return
+            if event.get('type') == 'result':
+                stream['result'] = event
+            if event.get('type') != 'stream_event':
+                return
+            e = event.get('event') or {}
+            block = e.get('content_block') or {}
+            if e.get('type') == 'message_start':
+                stream['text'] = ''
+            elif e.get('type') == 'content_block_start' and block.get('type') == 'tool_use':
+                stream['text'] = ''   # words before a tool call were not the answer
+                ctx.event('tool', tool_name(block.get('name')))
+            elif e.get('type') == 'content_block_delta' and (e.get('delta') or {}).get('type') == 'text_delta':
+                stream['text'] += e['delta'].get('text') or ''
+                ctx.event('text', stream['text'])
+        code, out, err = run_process(command, ctx, prompt, env, str(ctx.workdir), line)
+        result = stream['result']
         if code != 0 or result.get('is_error') or not result.get('result'):
             detail = result.get('result') or result.get('subtype') or (err.strip().splitlines() or out.strip().splitlines() or [''])[-1]
             raise BackendError(f'{self.title} failed (exit {code}): {detail[:300]}')
@@ -269,7 +332,7 @@ class Codex:
         def toml(value):
             return json.dumps(value, ensure_ascii=False)   # JSON strings and string arrays are valid TOML
         command = [binary, 'exec', '--ignore-user-config', '--skip-git-repo-check', '--ephemeral', '-s', 'read-only',
-                   '--color', 'never', '-C', str(ctx.workdir), '-o', str(last),
+                   '--json', '--color', 'never', '-C', str(ctx.workdir), '-o', str(last),
                    '-c', f'mcp_servers.totk-harness.command={toml(python)}',
                    '-c', f'mcp_servers.totk-harness.args={toml(args)}',
                    '-c', 'mcp_servers.totk-harness.startup_timeout_sec=30',
@@ -283,7 +346,17 @@ class Codex:
         if ctx.scene_image:
             command += ['--image', str(ctx.scene_image)]
         command.append('-')   # the prompt from standard input
-        code, out, err = run_process(command, ctx, f'{system}\n\n{prompt}', tool_env(binary), str(ctx.workdir))
+        def line(raw):   # codex exec --json: one event per line; its messages arrive whole
+            try:
+                event = json.loads(raw)
+            except ValueError:
+                return
+            item = event.get('item') or {}
+            if event.get('type') == 'item.started' and item.get('type') == 'mcp_tool_call':
+                ctx.event('tool', tool_name(item.get('tool')))
+            elif event.get('type') == 'item.completed' and item.get('type') == 'agent_message' and item.get('text'):
+                ctx.event('text', item['text'])
+        code, out, err = run_process(command, ctx, f'{system}\n\n{prompt}', tool_env(binary), str(ctx.workdir), line)
         text = last.read_text(encoding='utf-8').strip() if last.is_file() else ''
         if code != 0 or not text:
             lines = [l for l in (err + '\n' + out).splitlines() if l.strip()]
