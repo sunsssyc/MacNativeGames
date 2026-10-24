@@ -51,7 +51,7 @@ static BOOL hintTestMode(void);   // hint_test.inc: a test session drives the pa
 static void hintMarksShow(NSArray *marks);
 static void hintMarksHide(void);
 static NSButton *hintPointButton;
-static BOOL hintSceneReady, hintPointNext, hintPanelLeft;
+static BOOL hintSceneReady, hintPointNext, hintPanelLeft, hintMarksCleared;
 /* While the model works: what it is doing (the service's "stage") and the answer written so far ("partial"), typed out at
    a reading pace by hintReveal: the model hands its words over in one burst seconds before the run ends. */
 static NSString *hintStage, *hintPartial;
@@ -510,7 +510,7 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  hintID=NSUUID.UUID.UUIDString;
  NSMutableDictionary *request=[@{@"id":hintID,@"session":hintSession,@"tier":@(hintTier),@"time":@(NSDate.date.timeIntervalSince1970)} mutableCopy];
  if(hintPendingQuestion.length)request[@"question"]=hintPendingQuestion;
- BOOL pointing=hintPointNext&&hintSceneReady&&hintPendingQuestion.length;hintPointNext=NO;
+ BOOL pointing=hintPointNext&&hintSceneReady&&hintPendingQuestion.length;hintPointNext=NO;hintMarksCleared=NO;
  if(pointing)request[@"scene"]=@YES;   // 指给我看: the frame on screen goes with this question only
  hintActionsGranted=!pointing&&hintPendingQuestion.length&&hintActionsArmed&&[config[@"allow_actions"] boolValue];hintActionsArmed=NO;hintActionCount=0;
  if(hintActionsGranted)request[@"actions"]=@YES;

@@ -80,7 +80,7 @@ static void hintDockLayout(void){
 static void hintOpen(void){
  hintExpanded=YES;hintPause();
  if(![hintJSON(hintPath(@"assistant.json"))[@"enabled"] boolValue]){hintShowWelcome();return;}
- if(hintSession||hintWorking||hintDone){hintLayout(540);[hintPanel makeKeyWindow];[hintPanel makeFirstResponder:hintQuestion];}
+ if(hintSession||hintWorking||hintDone){hintLayout(540);hintMarksNoteOnOpen();[hintPanel makeKeyWindow];[hintPanel makeFirstResponder:hintQuestion];}
  else hintShowReady();
 }
 static void hintVoiceNotice(NSString *message){

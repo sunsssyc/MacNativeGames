@@ -10,6 +10,9 @@ static NSUInteger hintShotGeneration;
 static NSButton *hintPointButton;
 static NSPanel *hintMarksWindow;
 static NSArray<NSDictionary *> *hintMarks;
+/* The marks belong to the paused frame: when the game moves on they go, and the answer that talks about them ("圈出的
+   ……") must not stay in the companion's bubble as if they were still there (user, 2026-10-24: "并没有圈出来"). */
+static BOOL hintMarksCleared;
 
 static BOOL hintSceneSaved(NSString *path){   // the whole PNG is there: it ends in its IEND chunk
  NSFileHandle *file=[NSFileHandle fileHandleForReadingAtPath:path];
@@ -100,10 +103,11 @@ static void hintMarksShow(NSArray *marks){   // over the paused game window, und
   if(ok&&kept.count<4)[kept addObject:mark];
  }
  if(!kept.count||!hintSceneReady){hintMarksHide();return;}
- hintMarks=kept;
+ hintMarks=kept;hintMarksCleared=NO;
  if(!hintMarksWindow){
   hintMarksWindow=[[NSPanel alloc] initWithContentRect:NSZeroRect styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
   hintMarksWindow.backgroundColor=NSColor.clearColor;hintMarksWindow.opaque=NO;hintMarksWindow.hasShadow=NO;hintMarksWindow.ignoresMouseEvents=YES;
+  hintMarksWindow.hidesOnDeactivate=NO;hintMarksWindow.collectionBehavior=NSWindowCollectionBehaviorFullScreenAuxiliary;   // with the game window
   hintMarksWindow.contentView=[TOTKHintMarks new];
  }
  NSRect game=[hintGame convertRectToScreen:hintGame.contentView.bounds];
@@ -118,6 +122,16 @@ static void hintMarksShow(NSArray *marks){   // over the paused game window, und
  if(hintPanel.visible)[hintPanel orderFront:nil];
 }
 static void hintResume(void){   // the game moves on: the frame and its marks are gone
+ BOOL pointed=hintMarks.count>0;
  hintPauseHeld=NO;hintSceneReady=NO;hintShotGeneration++;hintMarksHide();
  if(runtime_assistant_pause)runtime_assistant_pause(0);
+ if(pointed){
+  hintMarksCleared=YES;
+  hintBubble.stringValue=@"圈画只留在暂停的画面上，游戏继续后已清除。\n按 8 打开对话，可以在当前画面上再指一次。";
+  hintDockLayout();
+ }
+}
+static void hintMarksNoteOnOpen(void){   // reopening after a 指给我看 answer: its circles are not on this frame
+ if(hintMarksCleared&&hintDone&&!hintWorking)
+  hintDisclosure.stringValue=@"上一条回答里的圈画已清除 · 点「指给我看」在当前画面上重新圈";
 }

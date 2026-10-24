@@ -247,6 +247,9 @@ int main(int argc,const char **argv){@autoreleasepool{
   [[shot representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(getenv("HINT_PROBE_MARKS")) atomically:YES];
  }
  [hintActions close:nil];assert(!hintMarksWindow.visible&&!hintSceneReady&&!assistantPaused&&!hintPanelLeft);
+ // The answer that talks about the circles does not stay in the bubble once they are gone, nor unexplained on reopening.
+ assert([hintBubble.stringValue containsString:@"已清除"]);assert(!hintMarksWindow.hidesOnDeactivate);
+ hintOpen();assert([hintDisclosure.stringValue containsString:@"圈画已清除"]);[hintActions close:nil];
  shotFails=YES;[[NSFileManager defaultManager] removeItemAtPath:hintPath(@"hint-scene.png") error:nil];
  hintOpen();assert(!assistantPaused);   // waiting for the frame
  [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.8]];
