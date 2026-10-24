@@ -12,6 +12,7 @@ import base64
 import json
 import math
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -61,6 +62,82 @@ def relation(src, dst):
     if abs(up) >= 40:
         text += f'，{"高" if up > 0 else "低"}约 {abs(round(up, -1)):.0f} 米'
     return {'text': text, 'distance_m': round(dist), 'height_m': round(up)}
+
+
+# runtime_state's actors (runtime/world_survey.c, read from the game's actor table): the game's internal names, made
+# readable here. Attached equipment and the game's own machinery are left out; a prefix gives the kind, words in the
+# name a rough Chinese gloss (a guess from the name, not the game's text).
+LIVE_SYSTEM = re.compile(r'^(PlayerCamera|EventCamera|RECCamera|CameraXLinkControl|CombinedActorIntegrator|VoicePlayActor|'
+                         r'EventWorldManagerController|EventEffectEmitter|PlayerRaulHand|MergedActorUncond|Dm_Locator|'
+                         r'PostProcessingActor|EffectUI|ReactionHit|ReactionField|Chemical|SpecialPower|Area|UltraHand|'
+                         r'NormalArrow|ThrowBox|CarryBox|Parasail|WakeBoardRope|Obj_OneTouch_Connection|'
+                         r'FldObj_EnterAttetionActor|GameDataActor|\w*SystemActor|\w*TextNPC|Expand\w*Field\w*|PurificationWave\w*|'
+                         r'PlayerShockWave|PlayerAttackGrave|ElectricWaterBall|Exterminator|MergedActor\w*|'
+                         r'ForbidAutoPlacement\w*|SoulSage_\w*Arrow\w*)$')
+LIVE_ATTACHED = ('Armor_', 'Weapon_', 'Accessory_', 'Item_')   # within 1.5 m: what Link wears or holds
+LIVE_KINDS = (('Sage_Soul_', '贤者分身'), ('DgnObj_', '神庙机关'), ('TBox_', '宝箱'), ('SpObj_', '机关装置'), ('Npc_', '人物'), ('Enemy_', '敌人'),
+              ('FldObj_', '场景物件'), ('Obj_', '物件'), ('Item_', '道具'), ('Weapon_', '武器'), ('Animal_', '动物'),
+              ('Horse_', '马'), ('Dm_', '演出物件'))
+LIVE_WORDS = (('TrolleyRail', '矿车轨道'), ('WindGenerator', '风扇'), ('Warpin', '入口传送台'), ('Wing', '翅膀'),
+              ('Cart', '矿车'), ('Rail', '轨道'), ('Fan', '风扇'), ('Generator', '生成装置'), ('Battery', '电池'),
+              ('Switch', '开关'), ('Lever', '拉杆'), ('Door', '门'), ('Gate', '门'), ('Ball', '球'), ('Rocket', '火箭'),
+              ('Balloon', '热气球'), ('Wheel', '车轮'), ('Spring', '弹簧'), ('Elevator', '升降台'), ('Pillar', '柱子'),
+              ('Floor', '地板'), ('Laser', '光线'), ('Beam', '光线'), ('Mirror', '镜子'), ('Goal', '终点'),
+              ('Dungeon', '神庙'), ('Gerudo', '格鲁德族'), ('Rito', '利特族'), ('Zora', '佐拉族'), ('Goron', '鼓隆族'),
+              ('Tree', '树'), ('Apple', '苹果'), ('BeeHome', '蜂巢'), ('Bee', '蜜蜂'), ('Stone', '石'), ('Iron', '铁'), ('Wood', '木'), ('Ice', '冰'), ('Fire', '火'),
+              ('Water', '水'), ('Electric', '电'))
+SIDES = ('正前方', '右前方', '右侧', '右后方', '正后方', '左后方', '左侧', '左前方')
+
+
+def heading_of(vector):
+    """Degrees clockwise from north (north is -z) of a horizontal direction."""
+    return math.degrees(math.atan2(vector[0], -vector[2])) % 360
+
+
+def live_view(state):
+    """runtime_state as the model reads it: facing in words, the actors nearby named and placed relative to Link, and
+    a scene guess (title screen, inside a shrine) judged from them. The raw position, facing and camera stay."""
+    if not isinstance(state, dict) or not state.get('position'):
+        return state
+    out = dict(state)
+    pos, facing = state['position'], state.get('facing')
+    facing_deg = heading_of(facing) if facing and math.hypot(facing[0], facing[2]) > 0.1 else None
+    if facing_deg is not None:
+        out['facing_text'] = f'面朝{COMPASS[int((facing_deg + 22.5) // 45) % 8]}'
+    nearby, by_name = [], {}
+    for actor in state.get('nearby') or []:
+        name, where, d = actor.get('name') or '', actor.get('position'), actor.get('distance') or 0
+        if not where or LIVE_SYSTEM.match(name) or (d < 1.5 and name.startswith(LIVE_ATTACHED)):
+            continue
+        if name in by_name and d - by_name[name]['distance_m'] < 30:   # a group of the same thing: one line, counted
+            by_name[name]['count'] = by_name[name].get('count', 1) + 1
+            continue
+        entry = {'name': name, 'distance_m': round(d)}
+        kind = next((zh for prefix, zh in LIVE_KINDS if name.startswith(prefix)), None)
+        matched = []   # a word inside a longer one already matched (Rail in TrolleyRail) adds nothing
+        for word, zh in LIVE_WORDS:
+            if word in name and not any(word in m for m, _ in matched):
+                matched.append((word, zh))
+        gloss = [zh for _, zh in matched]
+        if kind:
+            entry['kind'] = kind
+        if gloss:
+            entry['gloss'] = ' '.join(dict.fromkeys(gloss))
+        if facing_deg is not None and math.hypot(where[0] - pos[0], where[2] - pos[2]) >= 2:
+            bearing = heading_of([where[0] - pos[0], 0, where[2] - pos[2]])
+            entry['side'] = SIDES[int(((bearing - facing_deg) % 360 + 22.5) // 45) % 8]
+        entry['where'] = relation(pos, where)['text']
+        nearby.append(entry)
+        by_name[name] = entry
+    if 'nearby' in state:
+        out['nearby'] = nearby[:20]
+    if all(abs(v) < 1 for v in pos) and facing and abs(facing[2] - 1) < 0.01:
+        out['scene_guess'] = '标题画面或加载中（林克停在原点）'
+    elif any(a['name'].startswith(('DgnObj_', 'TBox_Dungeon')) for a in nearby):
+        out['scene_guess'] = '在神庙里（附近有神庙机关）'
+    if 'scene_guess' in out:
+        out['scene_guess_note'] = '由林克位置和附近物体推断，不是游戏直接报告的场景'
+    return out
 
 
 def field_of(pos):
@@ -450,8 +527,10 @@ class Harness:
              'inputSchema': {'type': 'object', 'properties': {
                  'duration_ms': {'type': 'integer', 'minimum': 0, 'maximum': 1000}}, 'additionalProperties': False}},
             {'name': 'runtime_state',
-             'description': 'Read live runtime player presence and position. no_player is not proof of a title menu. '
-                            'Health and quests may be unavailable. Never substitute saved values.',
+             'description': 'Read the running game now: Link\'s position and facing, the camera, the objects within '
+                            '150 m (the game\'s internal names with a kind and a Chinese gloss guessed from the name, '
+                            'where they are and on which side of Link), and a scene guess (title screen, in a shrine) '
+                            'judged from them. Health and quests are not read live. Never substitute saved values.',
              'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
         ]
         if self.allow_actions:
@@ -517,6 +596,14 @@ class Harness:
                 result = call(op, args.get('button'), args.get('duration_ms', 150))
             except (ValueError, TimeoutError, OSError) as e:
                 raise ToolError(str(e)) from e
+            if isinstance(result, dict) and isinstance(result.get('state'), dict):
+                view = live_view(result['state'])
+                if view.get('position') and 'scene_guess' not in view:   # world coordinates: name the place
+                    try:
+                        view['near_places'] = self.places.near(view['position'], limit=2)
+                    except Exception:   # the place tables are a nicety here, never the reason a live read fails
+                        pass
+                result = dict(result, state=view)
             image = None
         elif name == 'game_state':
             result, image = self.game_state(args.get('slot')), None

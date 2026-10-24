@@ -74,7 +74,7 @@ CLI 与 MCP 共用 runtime-request/runtime-response JSON 通道，由游戏主�
 
 | MCP 工具 | CLI | 含义 |
 |---|---|---|
-| runtime_state | `live state` | 当前进程、玩家对象是否存在、当前坐标、采样时间、助手暂停状态 |
+| runtime_state | `live state` | 玩家对象是否存在、坐标和朝向、镜头位置、150 米内的物体（游戏内部名、类别、按名称推测的中文提示、方位和在林克哪一侧、同类合并计数）、场景推断（标题画面 / 神庙里）、野外附近的地名、助手暂停状态 |
 | press_button | `live press --button down --duration-ms 150` | 一次 30–1000 ms 的控制器输入，结束后返回状态（仅代操作授权时） |
 | stop_action | `live stop` | 释放工具持有的按键（仅代操作授权时） |
 | wait_state | `live wait --duration-ms 500` | 等待后再观察；不推进已暂停的游戏 |
@@ -83,7 +83,7 @@ CLI 与 MCP 共用 runtime-request/runtime-response JSON 通道，由游戏主�
 按键包括 a/b/x/y、l/r/zl/zr、plus/minus、up/down/left/right、forward/backward/strafe_left/strafe_right、look_left/look_right/look_up/look_down。
 组合方式：观察 → 一次输入 → 等待 → 再观察。工具成功表示输入已经完成，不保证菜单切换、移动或战斗目标达成。
 
-当前版本只实现玩家对象和坐标的实时读取。`no_player` 不能区分标题菜单、加载或过场；实时血量、任务状态和场景名称尚未实现，返回未知。原 `game_state`、`quest_log` 仍明确属于历史存档。
+实时状态从游戏内存直接读，不看画面（`runtime/world_survey.c` 的 `runtime_live_scene`，只读，1.4.3）：林克的位置和旋转来自常驻角色表；附近物体来自游戏的角色表：`main+0x3ad6d78` 指向的对象（虚表 `main+0x3944c98`），+0x30 是格数（约 2100），从 +0x40 起每格 0x60 字节、开头是角色指针。读法是 2026-10-24 在测试会话里用 `survey nearby / refs / whois / dump / slots / table` 这组只读命令找出来的（同一文件，只在 `TOTK_SURVEY=1` 的测试会话可用）。表里也有系统对象和对象池：停在原点的、贴在林克身上的（1.5 米内）、名字带 SystemActor 或 Camera 的在运行时就跳过，箭、合并模型等在 `harness.live_view` 里再滤掉。中文提示只是按内部名里的英文词猜的，不是游戏文本。场景推断：林克停在原点、没有旋转是标题画面或加载中；附近有 `DgnObj_` 神庙机关是在神庙里（神庙用局部坐标，此时不给地名）。实时血量和任务状态仍未读取；`game_state`、`quest_log` 属于历史存档。
 
 提问只提交问题和会话上下文，不自动采集运行时、存档或画面。助手按问题选择工具；旧 prefetch_state 配置不再触发预读取。玩家对象可能在标题菜单存在，因此 runtime_state 的 world_state 保持 unknown，不凭对象存在或坐标推断已进入游戏。
 

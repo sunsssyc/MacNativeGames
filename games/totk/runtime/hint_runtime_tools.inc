@@ -1,7 +1,9 @@
 /* Request/reply bridge for small, composable runtime tools. No arbitrary memory writes. A press is taken only for the
    request in flight that the player allowed to act (hintActionsGranted), at most hintActionLimit per request; state and
    stop are always answered. */
+#include "live_scene.h"
 extern int runtime_live_player(float xyz[3]) __attribute__((weak_import));
+extern int runtime_live_scene(RuntimeScene *out, float radius) __attribute__((weak_import));
 extern void runtime_input_key_synthetic(unsigned code,int down) __attribute__((weak_import));
 static NSString *runtimeSeen;
 static NSInteger runtimeHeld=-1;
@@ -14,7 +16,21 @@ static NSDictionary *hintRuntimeState(void){
  @"player_present":@(present==1),@"world_state":@"unknown",
  @"note":@"Player objects may exist on the title screen; presence and position do not establish gameplay. Scene, health and live quests are unknown",
  @"assistant_paused":@(hintExpanded),@"action_active":@(runtimeHeld>=0),@"health":[NSNull null],@"quests":[NSNull null]} mutableCopy];
- if(present==1)s[@"position"]=@[@(xyz[0]),@(xyz[1]),@(xyz[2])];return s;
+ if(present==1)s[@"position"]=@[@(xyz[0]),@(xyz[1]),@(xyz[2])];
+ // The player's facing, the camera and the actors within 150 m (world_survey.c, 1.4.3); the assistant names them.
+ RuntimeScene scene;
+ if(present==1&&runtime_live_scene&&runtime_live_scene(&scene,150)==1){
+  s[@"facing"]=@[@(scene.rot[2]),@(scene.rot[5]),@(scene.rot[8])];
+  if(scene.has_camera)s[@"camera"]=@[@(scene.camera[0]),@(scene.camera[1]),@(scene.camera[2])];
+  s[@"actor_table"]=@(scene.table);
+  NSMutableArray *nearby=[NSMutableArray new];
+  for(int k=0;k<scene.actors;k++){
+   RuntimeActor *a=&scene.near[k];
+   [nearby addObject:@{@"name":@(a->name)?:@"?",@"position":@[@(a->xyz[0]),@(a->xyz[1]),@(a->xyz[2])],@"distance":@(round(a->distance*10)/10)}];
+  }
+  s[@"nearby"]=nearby;
+ }
+ return s;
 }
 static void hintRuntimeReply(NSString *id,NSString *error){
  NSDictionary *reply=@{@"id":id,@"ok":@(!error),@"error":error?:@"",@"state":hintRuntimeState()};

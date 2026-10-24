@@ -1,6 +1,11 @@
 #include "../games/totk/runtime/hint_overlay.m"
 #include <assert.h>
-int runtime_live_player(float xyz[3]){(void)xyz;return 0;}
+int runtime_live_player(float xyz[3]){xyz[0]=1;xyz[1]=2;xyz[2]=3;return 1;}
+// One actor ahead of the player, as world_survey.c reads them in the game.
+int runtime_live_scene(RuntimeScene *out,float radius){
+ (void)radius;memset(out,0,sizeof *out);out->rot[0]=out->rot[4]=1;out->rot[8]=-1;out->table=2135;out->has_camera=1;out->camera[2]=8;
+ out->actors=1;strcpy(out->near[0].name,"SpObj_LiftGeneratorWing_A_01");out->near[0].xyz[2]=-50;out->near[0].distance=53.1f;return 1;
+}
 static unsigned syntheticDowns;static int syntheticHeld=-1;
 void runtime_input_key_synthetic(unsigned code,int down){if(down){syntheticDowns++;syntheticHeld=(int)code;}else if(syntheticHeld==(int)code)syntheticHeld=-1;}
 static NSString *runtimePress(NSString *id){
@@ -120,6 +125,10 @@ int main(int argc,const char **argv){@autoreleasepool{
  assert(ceil(need.height)<=NSHeight(hintBubble.frame));
  hintBubble.stringValue=[@"" stringByPaddingToLength:400 withString:@"往北走到驿站再找英帕。" startingAtIndex:0];
  hintDockLayout();assert(hintBubble.cell.truncatesLastVisibleLine);assert(NSHeight(hintBubble.frame)>=6*17);
+ // runtime_state carries the facing, the camera and the actors nearby.
+ NSDictionary *live=hintRuntimeState();
+ assert(([live[@"facing"] isEqual:@[@0,@0,@(-1)]]));assert([live[@"actor_table"] intValue]==2135);
+ assert([live[@"nearby"][0][@"name"] isEqual:@"SpObj_LiftGeneratorWing_A_01"]);assert([live[@"camera"][2] floatValue]==8);
  // Game inputs: none without 「允许操作」 for the request in flight, at most hintActionLimit per request, Esc releases.
  [@"{\"enabled\":true}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
  hintDone=YES;hintWorking=NO;[hintActions actions:nil];assert(!hintActionsArmed);
