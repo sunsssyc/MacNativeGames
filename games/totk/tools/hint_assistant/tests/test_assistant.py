@@ -37,6 +37,21 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(result['tier'], 2)
         self.assertEqual(len(result['attempts']), 3)
 
+    def test_question_does_not_prefetch_even_with_legacy_config(self):
+        cfg = copy.deepcopy(self.config)
+        cfg['prefetch_state'] = True
+        backend = Mock()
+        backend.available.return_value = (True, '')
+        backend.run.return_value = {'text': '你好'}
+        with patch.object(service, 'compact_snapshot') as snapshot, patch.object(backends, 'make', return_value=backend):
+            service.hint(cfg, question='你好', allow_screenshot=False,
+                         runtime_snapshot={'secret_marker': 'unsolicited_runtime'})
+        snapshot.assert_not_called()
+        prompt = backend.run.call_args.args[1]
+        self.assertNotIn('unsolicited_runtime', prompt)
+        self.assertNotIn('请先调用 game_state', prompt)
+        self.assertIn('按本次问题决定', prompt)
+
     def test_cancel_does_not_read_save_or_launch_backend(self):
         cancel = threading.Event(); cancel.set()
         with patch.object(service, 'compact_snapshot') as snapshot, patch.object(backends, 'make') as make:
@@ -65,11 +80,50 @@ class AssistantTests(unittest.TestCase):
             self.assertEqual(answer['id'], 'two')
             self.assertEqual(answer['next_tier'], 3)
 
+    def test_typed_followup_keeps_same_tier_questions_and_answers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            server = service.Service(self.config, folder, log=lambda _: None)
+            fake = {'text': '往北边的入口走', 'backend': 'codex', 'seconds': 0, 'attempts': []}
+            with patch.object(service, 'hint', return_value=fake) as hint:
+                server.work({'id': 1, 'session': 'same', 'tier': 1, 'question': '入口在哪里？'}, threading.Event())
+                server.work({'id': 2, 'session': 'same', 'tier': 1, 'question': '那里离我多远？'}, threading.Event())
+                previous = hint.call_args.args[4]
+                self.assertEqual(previous, [{'tier': 1, 'question': '入口在哪里？', 'answer': '往北边的入口走'}])
+                prompt = prompts.user_prompt(1, question='那里离我多远？', previous=previous)
+                self.assertIn('入口在哪里？', prompt)
+                self.assertIn('往北边的入口走', prompt)
+                self.assertIn('那里离我多远？', prompt)
+                self.assertIn('不自动升级', prompt)
+                self.assertNotIn('这次要更进一步', prompt)
+                server.work({'id': 3, 'session': 'new', 'tier': 1, 'question': '我在哪里？'}, threading.Event())
+                self.assertEqual(hint.call_args.args[4], [])
+
+    def test_conversation_history_is_bounded_and_keeps_recent_turns(self):
+        with tempfile.TemporaryDirectory() as folder:
+            server = service.Service(self.config, folder, log=lambda _: None)
+            fake = {'text': '提示', 'backend': 'codex', 'seconds': 0, 'attempts': []}
+            with patch.object(service, 'hint', return_value=fake) as hint:
+                for i in range(service.MAX_HISTORY_TURNS + 2):
+                    server.work({'id': i, 'session': 'same', 'tier': 1, 'question': f'问题{i}'}, threading.Event())
+                self.assertEqual(len(server.sessions['same']), service.MAX_HISTORY_TURNS)
+                self.assertEqual(server.sessions['same'][0]['question'], '问题2')
+                self.assertEqual(len(hint.call_args.args[4]), service.MAX_HISTORY_TURNS)
+                for i in range(service.MAX_SESSIONS):
+                    server.work({'id': f'new{i}', 'session': f'new{i}', 'tier': 1}, threading.Event())
+                self.assertEqual(len(server.sessions), service.MAX_SESSIONS)
+                self.assertNotIn('same', server.sessions)
+
+    def test_snapshot_is_not_current_environment(self):
+        prompt = prompts.user_prompt(1, {'player': {'hearts_now': 3.5}}, '你好')
+        self.assertIn('不是当前状态', prompt)
+        self.assertIn('打招呼仅简短回应', prompts.SYSTEM)
+        self.assertIn('标题菜单', prompts.SYSTEM)
+
     def test_cancelled_backend_answer_is_not_published(self):
         with tempfile.TemporaryDirectory() as folder:
             server = service.Service(self.config, folder, log=lambda _: None)
             cancel = threading.Event()
-            def delayed(*args):
+            def delayed(*args, **kwargs):
                 cancel.set()
                 return {'text': 'must not appear'}
             with patch.object(service, 'hint', side_effect=delayed):
@@ -105,7 +159,7 @@ class AssistantTests(unittest.TestCase):
         results = [json.loads(line) for line in outgoing.getvalue().splitlines()]
         self.assertEqual(len(results), 7)
         self.assertEqual(results[0]['error']['code'], -32700)
-        self.assertEqual([t['name'] for t in results[2]['result']['tools']], ['game_state', 'quest_log', 'search_text'])
+        self.assertEqual([t['name'] for t in results[2]['result']['tools']], ['wait_state', 'runtime_state', 'press_button', 'stop_action', 'game_state', 'quest_log', 'search_text'])
         self.assertEqual([r['error']['code'] for r in results[3:6]], [-32602] * 3)
         self.assertEqual(results[-1]['result'], {})
         self.assertEqual(harness.Harness(allow_screenshot=True).tool_specs()[-1]['name'], 'screenshot')

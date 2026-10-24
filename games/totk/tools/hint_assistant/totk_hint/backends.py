@@ -20,7 +20,7 @@ from pathlib import Path
 from . import tables as tablemod
 
 RUN_PY = Path(__file__).resolve().parents[1] / 'run.py'
-TOOLS = ('game_state', 'quest_log', 'search_text')
+TOOLS = ('wait_state', 'runtime_state', 'press_button', 'stop_action', 'game_state', 'quest_log', 'search_text')
 CODEX_FEATURES_OFF = ('apps', 'browser_use', 'browser_use_external', 'computer_use', 'image_generation', 'in_app_browser',
                       'plugins', 'remote_plugin', 'hooks', 'goals', 'memories')
 
@@ -38,6 +38,7 @@ class Context:
 
     def __init__(self, config, allow_screenshot=False, romfs=None, save_root=None, cancel=None, timeout=None):
         self.config = config
+        self.scene_image = None
         self.allow_screenshot = allow_screenshot
         self.romfs = romfs
         self.save_root = save_root
@@ -168,6 +169,11 @@ class ClaudeCode:
             tools += ['mcp__totk-harness__screenshot', f'Read(/{SHOTS}/**)']
             builtin = 'Read'
             command += ['--add-dir', str(SHOTS)]
+        if ctx.scene_image:
+            builtin = 'Read'
+            tools += [f'Read(/{ctx.scene_image})']
+            command += ['--add-dir', str(ctx.scene_image.parent)]
+            prompt = f'先用 Read 查看本次游戏窗口截图：{ctx.scene_image}\n' + prompt
         command += ['--tools', builtin, '--allowedTools', ','.join(tools)]
         env = tool_env(binary)
         if self.vertex:
@@ -265,6 +271,8 @@ class Codex:
             command += ['-c', f'model_reasoning_effort={toml(self.settings["effort"])}']
         if self.settings.get('model'):
             command += ['-m', self.settings['model']]
+        if ctx.scene_image:
+            command += ['--image', str(ctx.scene_image)]
         command.append('-')   # the prompt from standard input
         code, out, err = run_process(command, ctx, f'{system}\n\n{prompt}', tool_env(binary), str(ctx.workdir))
         text = last.read_text(encoding='utf-8').strip() if last.is_file() else ''

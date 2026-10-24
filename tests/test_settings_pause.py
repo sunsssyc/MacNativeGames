@@ -43,6 +43,11 @@ int main(void) {
         assert(!runtime_settings_paused());
         assert(runtime_settings_pause_checkpoint() == 0);
     }
+    /* Assistant and settings own independent pause reasons. */
+    runtime_settings_pause(1); runtime_assistant_pause(1);
+    runtime_assistant_pause(0); assert(settings_pause_requested);
+    runtime_assistant_pause(1); runtime_settings_pause(0); assert(assistant_pause_requested);
+    runtime_assistant_pause(0); assert(runtime_settings_pause_checkpoint() == 0);
     /* Closing before the next frame does not leave a latent pause. */
     runtime_settings_pause(1); runtime_settings_pause(0);
     assert(runtime_settings_pause_checkpoint() == 0);

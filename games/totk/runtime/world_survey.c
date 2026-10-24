@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #ifdef GAME_BOTW
+int runtime_live_player(float xyz[3]){(void)xyz;return -1;}
 /* Breath of the Wild 1.6.0: no frame-end hook (the survey sync object is never found, see runtime_survey_sync), so
    "survey pos" reads and "survey move" writes the player's position from the command thread. The pointer chains from
    main's data segment are the ones Bloom (Swiffy22) found for 1.6.0 (the botw-save-state tool uses them); the code is
@@ -254,7 +255,14 @@ static uintptr_t player_actor(void) {
     }
     return 0;
 }
+int runtime_live_player(float xyz[3]) {
+    if(!survey_main)return -1;
+    uintptr_t actor=player_actor();
+    if(!actor)return 0;
+    return read_mem(actor+ACTOR_POS,xyz,3*sizeof(float))&&valid_xyz(xyz)?1:0;
+}
 void runtime_survey_init(Module *m) {
+    if(!strcmp(m->name,"main")&&SCENE_SLOT+8u<=m->size)survey_main=(uintptr_t)m->base;
     const char *enabled = getenv("TOTK_SURVEY");
     if (!enabled || strcmp(enabled, "1")) return;
     const char *owner = getenv("TOTK_SLOT_OWNER"), *profile = getenv("TOTK_PROFILE_DIR");

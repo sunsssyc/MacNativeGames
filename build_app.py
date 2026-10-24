@@ -1278,6 +1278,7 @@ def step_app(tree, out, logs, *, version="v0", game='totk'):
     files = ['build/spirv-cross/spirv-cross', f'rewritten/{version}/main.patched.bin', f'rewritten/{version}/sdk.patched.bin',
              f'rewritten/{version}/subsdk0.patched.bin', f'extracted/{version}/romfs/runtime-index.bin']   # romfs.bin: data_bundle
     if game == 'totk':
+        clone(tree / 'runtime/assets/riju-companion.png', res / 'runtime/assets/riju-companion.png')
         for source in sorted((tree / 'tools/hint_assistant').rglob('*.py')):
             clone(source, res / source.relative_to(tree))
     files += ['build/pso_manifest.tsv', 'build/pso_title.tsv']   # exported from the game's shared shader list (games/totk/Makefile)
@@ -1321,7 +1322,9 @@ def step_app(tree, out, logs, *, version="v0", game='totk'):
                 CFBundleDisplayName=app_name, CFBundlePackageType='APPL', CFBundleShortVersionString=expected['display_version'],
                 CFBundleVersion=str(expected['version'] + 1), LSMinimumSystemVersion='26.0', NSHighResolutionCapable=True,
                 LSApplicationCategoryType='public.app-category.action-games', LSSupportsGameMode=True,
-                GCSupportsControllerUserInteraction=True)
+                GCSupportsControllerUserInteraction=True,
+                NSMicrophoneUsageDescription='按住说话时录音，为露珠助手转写你的问题。',
+                NSSpeechRecognitionUsageDescription='将你主动说出的问题转成文字，发送给游戏助手。')
     icon = tree / 'build/AppIcon.icns'
     if icon.exists():
         clone(icon, tmp / 'Contents/Resources/AppIcon.icns')

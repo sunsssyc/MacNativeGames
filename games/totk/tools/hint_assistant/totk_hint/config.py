@@ -13,9 +13,10 @@ DEFAULTS = {
     'enabled': False,             # the game's launcher starts the hint service (serve) only when true
     'backends': list(BACKENDS),   # "auto" tries these in order until one answers
     'tier_default': 1,            # the first press of key 8: 1 where to go, 2 what to use, 3 full solution
+    'observe_current_scene': False,  # explicit opt-in; one game window image per question
     'allow_screenshot': False,    # may the model look at the game window (the player opts in here)
     'timeout_seconds': 120,       # per backend
-    'prefetch_state': True,       # start the prompt with game_state + quest_log (one model turn less)
+    'prefetch_state': False,      # legacy key; observations are now tool-selected
     'romfs': None,                # game data folder (romfs.bin + runtime-index.bin or index.json); found by itself
     'save_root': None,            # folder with <user id>/slot_NN; default: the player's profile
     'text_language': 'CNzh',      # game text language for names and quest logs
@@ -50,7 +51,7 @@ def load(path=None):
             raise ValueError(f'{path}: expected a JSON object')
     config = _merge(DEFAULTS, data)
     config['_path'] = str(path)
-    for key in ('enabled', 'allow_screenshot', 'prefetch_state'):
+    for key in ('enabled', 'allow_screenshot', 'observe_current_scene', 'prefetch_state'):
         if not isinstance(config[key], bool):
             raise ValueError(f'{path}: {key} must be true or false')
     if not isinstance(config['backends'], list) or any(name not in BACKENDS for name in config['backends']):

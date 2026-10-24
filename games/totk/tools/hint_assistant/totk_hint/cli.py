@@ -27,6 +27,11 @@ def _print(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='totk_hint', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='command', required=True)
+    p = sub.add_parser('live', help='live runtime state or one bounded controller action')
+    p.add_argument('op', choices=('state','press','stop','wait'))
+    p.add_argument('--button')
+    p.add_argument('--duration-ms',type=int,default=150)
+    p.add_argument('--folder')
     p = sub.add_parser('hint', help='one hint for the current save')
     _common(p)
     p.add_argument('--tier', type=int, choices=(1, 2, 3), help='1 where to go, 2 what to use, 3 full solution (default: assistant.json)')
@@ -66,6 +71,12 @@ def main(argv=None):
     p.add_argument('--init', action='store_true', help='write assistant.json with the defaults (never overwrites)')
     args = parser.parse_args(argv)
 
+    if args.command == 'live':
+        from .live import call
+        try:
+            reply=call(args.op,args.button,args.duration_ms,args.folder);_print(reply);return 0 if reply['ok'] else 1
+        except (ValueError,TimeoutError,OSError) as e:
+            _print({'ok':False,'error':str(e)});return 1
     if args.command == 'config' and args.init:
         print(configmod.write_default(args.config))
         return 0

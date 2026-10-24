@@ -106,7 +106,11 @@ class VertexREST:
                  for s in harness.tool_specs()]
         model = self.settings.get('model') or 'claude-opus-5-5'
         fallback = self.settings.get('fallback_model')
-        messages = [{'role': 'user', 'content': prompt}]
+        content = [{'type': 'text', 'text': prompt}]
+        if ctx.scene_image:
+            mime, data = image_block(ctx.scene_image)
+            content.insert(0, {'type': 'image', 'source': {'type': 'base64', 'media_type': mime, 'data': data}})
+        messages = [{'role': 'user', 'content': content}]
         deadline = time.monotonic() + ctx.timeout
         calls = 0
         for turn in range(MAX_TURNS):

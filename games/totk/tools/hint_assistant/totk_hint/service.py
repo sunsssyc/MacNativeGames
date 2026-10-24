@@ -23,10 +23,13 @@ from .romfs import DATA_DIR
 
 REQUEST = 'hint-request.json'
 RESPONSE = 'hint-response.json'
+MAX_HISTORY_TURNS = 12
+MAX_SESSIONS = 8
+MAX_QUESTION_CHARS = 2000
 
 
 def hint(config, tier=None, backend='auto', question=None, previous=None, allow_screenshot=None, romfs=None,
-         save_root=None, cancel=None, progress=None):
+         save_root=None, cancel=None, progress=None, scene_image=None, scene_status=None, runtime_snapshot=None):
     """{"text", "tier", "backend", "model", "seconds", "attempts"}; raises BackendError when no backend answers."""
     if cancel is not None and cancel.is_set():
         raise backendmod.Cancelled()
@@ -35,9 +38,9 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
     shots = bool(shots) and bool(Harness.game_pid())   # a screenshot needs the running game
     t0 = time.monotonic()
     snapshot = None
-    if config.get('prefetch_state', True):
-        snapshot = compact_snapshot(Harness(config, romfs, save_root, shots))
+    # Legacy prefetch settings are ignored: observations are selected through tools.
     prompt = user_prompt(tier, snapshot, question, previous, shots)
+    prompt += '\n本次当前画面：' + ('已附带游戏窗口截图。先看画面，再回答；存档只作为历史背景。' if scene_image else '不可用。不能假装看到了当前场景，不能把存档当作实时状态。')
     attempts = []
     for name in backendmod.order(backend, config):
         if cancel is not None and cancel.is_set():
@@ -50,6 +53,7 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
         if progress:
             progress(name)
         ctx = backendmod.Context(config, shots, romfs, save_root, cancel)
+        ctx.scene_image = scene_image
         try:
             answer = b.run(SYSTEM, prompt, ctx)
         except backendmod.BackendError as e:
@@ -88,7 +92,7 @@ class Service:
         self.config = config
         self.folder = Path(folder) if folder else DATA_DIR
         self.romfs, self.save_root, self.log = romfs, save_root, log
-        self.sessions = {}   # session id -> [(tier, text)]
+        self.sessions = {}   # session id -> bounded completed question/answer turns
         self.current = None  # (request id, cancel event, thread)
         self.lock = threading.Lock()
 
@@ -103,16 +107,28 @@ class Service:
     def work(self, request, cancel):
         tier = request.get('tier') if request.get('tier') in (1, 2, 3) else self.config['tier_default']
         session = request.get('session') or request.get('id')
-        previous = [p for p in self.sessions.get(session, []) if p[0] < tier]
+        question = request.get('question')
+        question = question.strip()[:MAX_QUESTION_CHARS] if isinstance(question, str) else ''
+        with self.lock:
+            history = list(self.sessions.get(session, []))
+        # Typed follow-ups retain the conversation, including replies at the same tier.
+        # The original tier buttons still reveal only earlier, less detailed hints.
+        previous = history if question else [(p['tier'], p['answer']) for p in history if p['tier'] < tier]
         self.respond(request, 'working', tier=tier, text='正在查看存档和任务日志……', next_tier=None)
 
         def progress(name):
             title = backendmod.make(name, self.config).title
             self.respond(request, 'working', tier=tier, backend=name, text=f'正在思考（{title}）……', next_tier=None)
         t0 = time.monotonic()
+        scene_image = None
+        candidate = request.get('scene_image')
+        if self.config.get('observe_current_scene') and candidate == str(self.folder / 'hint-scene.png'):
+            path = Path(candidate)
+            if path.is_file() and 0 <= time.time() - path.stat().st_mtime <= 15:
+                scene_image = path
         try:
-            result = hint(self.config, tier, request.get('backend') or 'auto', request.get('question'), previous,
-                          request.get('screenshot'), self.romfs, self.save_root, cancel, progress)
+            result = hint(self.config, tier, request.get('backend') or 'auto', question or None, previous,
+                          request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image, scene_status=request.get("scene_status"))
         except backendmod.Cancelled:
             self.log(f'[hint] request {request.get("id")} cancelled')
             self.respond(request, 'cancelled', tier=tier, text='', next_tier=None)
@@ -125,7 +141,14 @@ class Service:
         if cancel.is_set():
             self.respond(request, 'cancelled', tier=tier, text='', next_tier=None)
             return
-        self.sessions.setdefault(session, []).append((tier, result['text']))
+        with self.lock:
+            if cancel.is_set() or (self.current and self.current[0] != request.get('id')):
+                return
+            turns = self.sessions.pop(session, [])
+            turns.append({'tier': tier, 'question': question, 'answer': result['text']})
+            self.sessions[session] = turns[-MAX_HISTORY_TURNS:]
+            while len(self.sessions) > MAX_SESSIONS:
+                del self.sessions[next(iter(self.sessions))]
         self.log(f'[hint] request {request.get("id")} tier {tier} by {result["backend"]} in {result["seconds"]} s'
                  + (f' (skipped: {"; ".join(result["attempts"])})' if result['attempts'] else ''))
         self.respond(request, 'done', tier=tier, text=result['text'], backend=result['backend'],
