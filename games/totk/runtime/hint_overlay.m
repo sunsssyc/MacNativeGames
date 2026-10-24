@@ -19,6 +19,7 @@ static NSButton *hintMic,*hintRead,*hintVoiceCancel;
 static NSImageView *hintPortrait;
 static NSMutableArray<NSString *> *hintHistory;
 static void hintDockLayout(void);
+static void hintGuideAsk(void);
 static void hintDragBegin(NSEvent *event);
 static void hintDragMove(NSEvent *event);
 static void hintDragEnd(NSEvent *event);
@@ -65,10 +66,10 @@ static void hintRuntimeStop(void);
 static BOOL hintRuntimeActive(void);
 /* 「允许操作」: armed for the next typed question when assistant.json allow_actions is true; granted to the request in
    flight, which may press at most hintActionLimit buttons (hint_runtime_tools.inc). Esc, closing and the answer end it. */
-static NSButton *hintActionsButton;
+static NSButton *hintActionsButton,*hintGuideButton;
 static BOOL hintActionsArmed, hintActionsGranted;
 static NSUInteger hintActionCount;
-static const NSUInteger hintActionLimit=6;
+static NSUInteger hintActionLimit=6;   // assistant.json action_limit, refreshed when the panel opens
 static NSPanel *hintPanel;
 static NSTextField *hintText, *hintTitle, *hintDisclosure;
 static NSButton *hintEnable, *hintBack, *hintSend;
@@ -98,6 +99,11 @@ static NSColor *hintInk(void){return [NSColor colorWithCalibratedRed:0.99 green:
 static NSColor *hintAccent(void){return [NSColor colorWithCalibratedRed:0.88 green:0.40 blue:0.015 alpha:1];}
 static NSColor *hintSurface(void){return [NSColor colorWithCalibratedRed:0.055 green:0.06 blue:0.045 alpha:1];}
 static BOOL hintActionsAllowed(void){return [hintJSON(hintPath(@"assistant.json"))[@"allow_actions"] boolValue];}
+static void hintActionLimitLoad(void){
+ NSNumber *value=hintJSON(hintPath(@"assistant.json"))[@"action_limit"];
+ NSInteger limit=[value isKindOfClass:NSNumber.class]?value.integerValue:6;
+ hintActionLimit=(NSUInteger)(limit<1?1:limit>40?40:limit);
+}
 static void hintActionsEnd(void){hintActionsGranted=NO;hintRuntimeStop();}
 #include "hint_panel_frame.inc"
 // The same inset and divider geometry frame every step of the assistant flow; the header moves the panel, the lower
@@ -214,6 +220,7 @@ static NSFont *hintFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-R
 -(void)cancelVoice:(id)sender;
 -(void)actions:(id)sender;
 -(void)point:(id)sender;
+-(void)guide:(id)sender;
 @end
 static TOTKHintActions *hintActions;
 static void hintLayout(CGFloat height){
@@ -253,12 +260,14 @@ static void hintLayout(CGFloat height){
  hintSend.frame=NSMakeRect(w-72,62,52,34);
  hintEnable.frame=NSMakeRect(20,hintWelcome?112:104,hintWelcome?158:92,28);
  hintPointButton.frame=NSMakeRect(116,104,70,28);
- hintPointButton.hidden=hintWelcome||hintWorking||!hintSceneReady||!hintExpanded;
- hintPointButton.toolTip=@"把这个问题和暂停的画面一起发给露珠，她会在画面上圈出来（只对这个问题有效）";
+ hintPointButton.hidden=hintWelcome||hintWorking||!hintExpanded;
+ hintPointButton.toolTip=@"先抓取当前画面并暂停游戏，再让露珠在画面上圈出来（只对这个问题有效）";
  hintHistoryButton.hidden=hintWelcome||hintHistoryCount()==0;
  hintHistoryButton.title=hintHistoryButtonTitle();
  hintHistoryButton.frame=NSMakeRect(w-124,104,48,28);
  hintActionsButton.frame=NSMakeRect(w-190,104,64,28);
+ hintGuideButton.frame=NSMakeRect(w-140,h-46,58,26);
+ hintGuideButton.hidden=hintWelcome||hintWorking;
  hintActionsButton.hidden=hintWelcome||hintWorking||!hintActionsAllowed();
  hintActionsButton.title=hintActionsArmed?@"✓ 允许操作":@"允许操作";
  ((TOTKHintButton *)hintActionsButton).quiet=!hintActionsArmed;((TOTKHintButton *)hintActionsButton).primary=hintActionsArmed;
@@ -293,7 +302,8 @@ static void hintShow(NSString *text) {
 }
 #include "hint_scene.inc"
 static void hintShowWelcome(void){
- hintExpanded=YES;hintPause();hintWelcome=YES;((TOTKHintButton *)hintEnable).primary=YES;
+ // The game keeps running while the panel is open: only 指给我看, 代操作 and a paused frame need it to stop.
+ hintExpanded=YES;hintWelcome=YES;((TOTKHintButton *)hintEnable).primary=YES;hintActionLimitLoad();
  hintTitle.hidden=hintDisclosure.hidden=hintEnable.hidden=hintBack.hidden=NO;hintProgress.hidden=YES;[hintProgress stopAnimation:nil];
  hintTitle.stringValue=@"露珠";
  hintText.stringValue=@"遇到难题时，先给一点线索。\n需要时，再逐步查看更具体的提示。";
@@ -302,11 +312,11 @@ static void hintShowWelcome(void){
  hintLayout(440);
 }
 static void hintShowReady(void){
- hintExpanded=YES;hintPause();
- hintWorking=hintDone=NO;hintSession=nil;hintPendingQuestion=nil;hintLastQuestion=nil;hintQuestion.stringValue=@"";[hintHistory removeAllObjects];
+ hintExpanded=YES;hintActionLimitLoad();
+ hintWorking=hintDone=NO;hintSession=nil;hintPendingQuestion=nil;hintLastQuestion=nil;hintPointNext=NO;hintQuestion.stringValue=@"";[hintHistory removeAllObjects];
  hintShow(@"卡在哪里了？告诉我，或先看看进度提示。");
  hintTitle.stringValue=@"露珠";hintEnable.title=@"根据进度给提示";
- hintDisclosure.stringValue=@"游戏已暂停 · 收起后继续";
+ hintDisclosure.stringValue=@"游戏继续运行 · 收起面板随时接着玩；指路和指给我看会暂停游戏";
  [hintPanel makeKeyWindow];[hintPanel makeFirstResponder:hintQuestion];
 }
 // Requests carry user intent only; the assistant chooses observations through tools.
@@ -321,13 +331,20 @@ static BOOL hintWrite(NSDictionary *value) {
 -(void)voice:(id)sender{(void)sender;if(hintListening)hintVoiceEnd(NO);else hintVoiceBegin();}
 -(void)cancelVoice:(id)sender{(void)sender;hintVoiceEnd(YES);}
 // 指给我看: the typed question (or a plain "what now") with the frame on screen, for marks drawn on it (hint_scene.inc).
+// The game keeps running until this is pressed; only then is the frame saved and the game paused behind it.
 -(void)point:(id)sender{
- (void)sender;if(hintWorking||!hintSceneReady||hintListening||hintVoiceFinishing)return;
+ (void)sender;if(hintWorking||hintListening||hintVoiceFinishing)return;
  NSString *q=[hintQuestion.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
- hintPendingQuestion=q.length?q:@"指给我看：画面里我下一步该做什么？";hintPointNext=YES;[self request:nil];
+ hintPendingQuestion=q.length?q:@"指给我看：画面里我下一步该做什么？";hintPointNext=YES;
+ if(hintSceneReady){[self request:nil];return;}
+ if(hintPauseHeld){[self request:nil];return;}   // no frame came the first time: ask without marks
+ hintDisclosure.stringValue=@"正在抓取这一帧，抓好后暂停游戏…";
+ hintPause();   // hintPauseWhenSaved sends the question once the frame is on disk
 }
+-(void)guide:(id)sender{(void)sender;hintGuideAsk();}
 -(void)actions:(id)sender{(void)sender;hintActionsArmed=!hintActionsArmed&&hintActionsAllowed();hintLayout(0);
- hintDisclosure.stringValue=hintActionsArmed?@"下一个问题允许露珠操作游戏（最多 6 次短按）· Esc 随时中止":@"可输入问题继续追问";}
+ hintActionLimitLoad();
+ hintDisclosure.stringValue=hintActionsArmed?[NSString stringWithFormat:@"下一个问题允许露珠操作游戏（最多 %lu 次短按）· Esc 随时中止",(unsigned long)hintActionLimit]:@"可输入问题继续追问";}
 // 朗读 is a switch, remembered in assistant.json: on reads the answer on screen and every answer after it (hint_voice.inc).
 -(void)read:(id)sender{
  (void)sender;BOOL on=!hintReadOn();
@@ -394,6 +411,7 @@ static BOOL hintStart(void) {
 }
 
 #include "hint_runtime_tools.inc"
+#include "hint_guide.inc"
 static void hintRevealStop(void){[hintRevealTimer invalidate];hintRevealTimer=nil;}
 static void hintReveal(void){   // a few more characters of the answer being written, about 90 a second
  if(!hintWorking||hintRevealed>=hintPartial.length){hintRevealStop();return;}
@@ -412,6 +430,8 @@ static void hintStream(NSDictionary *answer){   // the service's progress while 
 }
 static void hintPoll(void) {
  hintRuntimePoll();
+ hintGuidePoll();
+ hintGuideTick();
  hintVoicePoll();
  hintDockLayout();
  if(!hintWorking)return;
@@ -477,9 +497,14 @@ void totk_hint_install(NSWindow *window) {
  hintPointButton.hidden=YES;[hintPanel.contentView addSubview:hintPointButton];
  hintActionsButton=[TOTKHintButton buttonWithTitle:@"允许操作" target:hintActions action:@selector(actions:)];hintActionsButton.hidden=YES;
  hintActionsButton.toolTip=@"只对下一个问题有效：露珠可以替你按几次键（assistant.json 的 allow_actions 打开时才显示）";[hintPanel.contentView addSubview:hintActionsButton];
- for(TOTKHintButton *button in @[hintBack,hintRead,hintEnable,hintHistoryButton])button.quiet=YES;
+ hintGuideButton=[TOTKHintButton buttonWithTitle:@"指路" target:hintActions action:@selector(guide:)];((TOTKHintButton *)hintGuideButton).quiet=YES;
+ hintGuideButton.toolTip=@"按存档里当前任务的最近目标标出方向；收起面板后跟着箭头走，不经过模型";hintGuideButton.hidden=YES;[hintPanel.contentView addSubview:hintGuideButton];
+ for(TOTKHintButton *button in @[hintBack,hintRead,hintEnable,hintHistoryButton,hintGuideButton])button.quiet=YES;
  hintVoiceCancel=[TOTKHintButton buttonWithTitle:@"取消录音" target:hintActions action:@selector(cancelVoice:)];((TOTKHintButton *)hintVoiceCancel).quiet=YES;hintVoiceCancel.hidden=YES;[hintPanel.contentView addSubview:hintVoiceCancel];
  hintVoiceInstall();
+ hintGuidePanel=[[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,232,116) styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
+ hintGuidePanel.backgroundColor=NSColor.clearColor;hintGuidePanel.opaque=NO;hintGuidePanel.hasShadow=NO;hintGuidePanel.ignoresMouseEvents=YES;
+ hintGuidePanel.collectionBehavior=NSWindowCollectionBehaviorFullScreenAuxiliary;hintGuidePanel.contentView=[TOTKHintGuide new];
  hintDock=[[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,360,120) styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];hintDock.backgroundColor=NSColor.clearColor;hintDock.opaque=NO;hintDock.hasShadow=NO;
  // The companion belongs to the game window, including background test windows.
  hintDock.hidesOnDeactivate=NO;hintDock.collectionBehavior=NSWindowCollectionBehaviorFullScreenAuxiliary;
@@ -524,10 +549,14 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  hintID=NSUUID.UUID.UUIDString;
  NSMutableDictionary *request=[@{@"id":hintID,@"session":hintSession,@"tier":@(hintTier),@"time":@(NSDate.date.timeIntervalSince1970)} mutableCopy];
  if(hintPendingQuestion.length)request[@"question"]=hintPendingQuestion;
- BOOL pointing=hintPointNext&&hintSceneReady&&hintPendingQuestion.length;hintPointNext=NO;hintMarksCleared=NO;
+ BOOL pointing=hintPointNext&&hintSceneReady&&hintPendingQuestion.length;
+ BOOL waitingForFrame=hintPointNext&&!hintSceneReady;   // 指给我看 asked for a pause even without a frame
+ hintPointNext=NO;hintMarksCleared=NO;
  if(pointing)request[@"scene"]=@YES;   // 指给我看: the frame on screen goes with this question only
+ if(hintPauseHeld&&!pointing&&!waitingForFrame)hintResume();   // a plain question runs on the live game
+ hintActionLimitLoad();
  hintActionsGranted=!pointing&&hintPendingQuestion.length&&hintActionsArmed&&[config[@"allow_actions"] boolValue];hintActionsArmed=NO;hintActionCount=0;
- if(hintActionsGranted)request[@"actions"]=@YES;
+ if(hintActionsGranted){request[@"actions"]=@YES;request[@"action_limit"]=@(hintActionLimit);}
  hintMarksHide();
  BOOL reading=hintReadOn();
  if(reading)request[@"read"]=@YES;   // read aloud line by line as it is written; the voice gets ready meanwhile

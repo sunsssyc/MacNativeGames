@@ -21,6 +21,9 @@ DEFAULTS = {
     # May the model press game buttons. Even when true, only for a question the player sends with 「允许操作」 in the
     # panel; the game takes at most a few presses per request and Esc stops them (runtime/hint_runtime_tools.inc).
     'allow_actions': False,
+    # Presses one request may spend, for press_button and every step of a press_sequence (1..40). The panel shows the
+    # number and sends it with the request, so the model plans within the same budget the game enforces.
+    'action_limit': 6,
     'timeout_seconds': 45,        # per backend: a stuck one leaves time for the next in "backends"
     'total_timeout_seconds': 150, # one request, all backends; the game gives up a little after this
     'prefetch_state': False,      # legacy key; observations are now tool-selected
@@ -112,6 +115,9 @@ def load(path=None):
         raise ValueError(f'{path}: agent.provider must be anthropic, openai, vertex or gemini')
     if agent.get('tool_protocol') not in ('native', 'text'):
         raise ValueError(f'{path}: agent.tool_protocol must be native or text')
+    limit = config.get('action_limit')
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 40:
+        raise ValueError(f'{path}: action_limit must be 1..40')
     tier = config.get('tier_default')
     config['tier_default'] = tier if tier in (1, 2, 3) else 1
     return config

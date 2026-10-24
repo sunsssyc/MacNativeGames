@@ -1,13 +1,46 @@
 #include "../games/totk/runtime/hint_overlay.m"
 #include <assert.h>
 int runtime_live_player(float xyz[3]){xyz[0]=1;xyz[1]=2;xyz[2]=3;return 1;}
-// One actor ahead of the player, as world_survey.c reads them in the game.
+// One actor ahead of the player, as world_survey.c reads them in the game, plus one that can appear on demand (the
+// runtime_state "changes" test).
+static int sceneExtra;
 int runtime_live_scene(RuntimeScene *out,float radius){
  (void)radius;memset(out,0,sizeof *out);out->rot[0]=out->rot[4]=1;out->rot[8]=-1;out->table=2135;out->has_camera=1;out->camera[2]=8;
- out->actors=1;strcpy(out->near[0].name,"SpObj_LiftGeneratorWing_A_01");out->near[0].xyz[2]=-50;out->near[0].distance=53.1f;return 1;
+ out->cam_rot[0]=out->cam_rot[4]=1;out->cam_rot[8]=-1;out->has_cam_rot=1;
+ out->actors=1;strcpy(out->near[0].name,"SpObj_LiftGeneratorWing_A_01");out->near[0].xyz[2]=-50;out->near[0].distance=53.1f;
+ if(sceneExtra){out->actors=2;strcpy(out->near[1].name,"SpObj_Switch_A_01");out->near[1].xyz[0]=2;out->near[1].distance=2.2f;}
+ return 1;
+}
+// The camera and player rotations for the guide arrow's fast path: level, facing north (-Z). cameraConvention picks
+// which way the game stores the camera's forward axis; the arrow must come out the same either way.
+static int cameraConvention;
+int runtime_live_facing(float player_rot[9],float camera_rot[9],float camera_pos[3]){
+ player_rot[0]=player_rot[4]=1;player_rot[8]=-1;
+ camera_rot[0]=camera_rot[4]=1;camera_rot[8]=cameraConvention?1:-1;   // the sign is settled by the position below
+ camera_pos[0]=1;camera_pos[1]=2;camera_pos[2]=3+8;   // eight metres behind Link (south of him), so it looks north
+ return 3;
 }
 static unsigned syntheticDowns;static int syntheticHeld=-1;
 void runtime_input_key_synthetic(unsigned code,int down){if(down){syntheticDowns++;syntheticHeld=(int)code;}else if(syntheticHeld==(int)code)syntheticHeld=-1;}
+static NSDictionary *runtimeSequence(NSString *id,NSArray *steps){
+ NSDictionary *q=@{@"id":id,@"op":@"sequence",@"steps":steps,@"time":@(NSDate.date.timeIntervalSince1970)};
+ [[NSJSONSerialization dataWithJSONObject:q options:0 error:nil] writeToFile:hintPath(@"runtime-request.json") atomically:YES];
+ [NSFileManager.defaultManager removeItemAtPath:hintPath(@"runtime-response.json") error:nil];hintRuntimePoll();
+ // The steps run on dispatch_after: pump the main queue until the reply for this id is written.
+ NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:3];
+ while(deadline.timeIntervalSinceNow>0){
+  NSDictionary *r=hintJSON(hintPath(@"runtime-response.json"));
+  if([r[@"id"] isEqual:id])return r;
+  [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+ }
+ return @{};
+}
+static NSDictionary *runtimeStateReply(NSString *id){
+ NSDictionary *q=@{@"id":id,@"op":@"state",@"time":@(NSDate.date.timeIntervalSince1970)};
+ [[NSJSONSerialization dataWithJSONObject:q options:0 error:nil] writeToFile:hintPath(@"runtime-request.json") atomically:YES];
+ [NSFileManager.defaultManager removeItemAtPath:hintPath(@"runtime-response.json") error:nil];hintRuntimePoll();
+ NSDictionary *r=hintJSON(hintPath(@"runtime-response.json"));return [r[@"id"] isEqual:id]?r:@{};
+}
 static NSString *runtimePress(NSString *id){
  NSDictionary *q=@{@"id":id,@"op":@"press",@"button":@"a",@"duration_ms":@50,@"time":@(NSDate.date.timeIntervalSince1970)};
  [[NSJSONSerialization dataWithJSONObject:q options:0 error:nil] writeToFile:hintPath(@"runtime-request.json") atomically:YES];
@@ -76,7 +109,7 @@ int main(int argc,const char **argv){@autoreleasepool{
  [@"{\"enabled\":false,\"allow_screenshot\":false,\"custom\":42}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
  [hintActions enable:nil];NSDictionary *c=hintJSON(path);assert([c[@"enabled"] boolValue]);assert([c[@"custom"] intValue]==42);assert(![c[@"allow_screenshot"] boolValue]);
  assert(![NSFileManager.defaultManager fileExistsAtPath:hintPath(@"hint-request.json")]);
- assert(assistantPaused);assert(!hintWelcome);assert(!hintQuestion.hidden);assert(hintQuestion.editable);assert(hintQuestion.stringValue.length==0);
+ assert(!assistantPaused);assert(!hintWelcome);assert(!hintQuestion.hidden);assert(hintQuestion.editable);assert(hintQuestion.stringValue.length==0);
  [@"invalid" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];[hintActions enable:nil];
  assert([[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] isEqual:@"invalid"]);
  assert([hintDisclosure.stringValue containsString:@"未被修改"]);
@@ -130,7 +163,7 @@ int main(int argc,const char **argv){@autoreleasepool{
  assert(!totk_hint_key(v,YES));assert(!totk_hint_key(v,NO));
  // Collapsing and reopening preserves the existing conversation.
  hintSession=@"preserved-session";hintDone=YES;[hintActions close:nil];hintOpen();
- assert([hintSession isEqual:@"preserved-session"]);assert(assistantPaused);
+ assert([hintSession isEqual:@"preserved-session"]);assert(!assistantPaused);
  [hintActions close:nil];assert(!assistantPaused);
  hintDone=YES;hintHistory=[NSMutableArray arrayWithArray:@[@"你\n入口在哪？",@"露珠\n往北走。"]];hintShow(@"往北走。");
  assert([hintText.stringValue isEqual:@"往北走。"]);[hintActions history:nil];
@@ -243,9 +276,10 @@ int main(int argc,const char **argv){@autoreleasepool{
  // marks over the paused window until the game moves again. Without a new frame (a covered window) it pauses anyway.
  [@"{\"enabled\":true}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
  [hintActions close:nil];assert(!assistantPaused);[w orderFront:nil];
- hintOpen();assert(assistantPaused&&hintSceneReady);assert(hintSceneSaved(hintPath(@"hint-scene.png")));
+ hintOpen();assert(!assistantPaused&&!hintSceneReady);   // a plain question leaves the game running
  hintWorking=NO;hintDone=YES;hintLayout(0);assert(!hintPointButton.hidden);
- hintQuestion.stringValue=@"";[hintActions point:nil];
+ hintQuestion.stringValue=@"";[hintActions point:nil];   // saves the frame, pauses, then sends
+ assert(assistantPaused&&hintSceneReady);assert(hintSceneSaved(hintPath(@"hint-scene.png")));
  NSDictionary *pointing=hintJSON(hintPath(@"hint-request.json"));
  assert([pointing[@"scene"] boolValue]&&[pointing[@"question"] hasPrefix:@"指给我看"]&&!pointing[@"actions"]);
  NSArray *marks=@[@{@"kind":@"circle",@"at":@[@0.34,@0.51],@"label":@"发光图案"},@{@"kind":@"arrow",@"at":@[@0.8,@0.9],@"to":@[@0.4,@0.55],@"label":@"往这边走"}];
@@ -271,15 +305,61 @@ int main(int argc,const char **argv){@autoreleasepool{
  // The controller (totk_hint_pad): its assistant button opens the panel as key 8 does, A turns a page as Return does, B
  // closes it as Esc does; while it is closed only the assistant button reaches it.
  assert(!totk_hint_pad(CONTROLLER_UI_HELD)&&!totk_hint_pad(CONTROLLER_UI_ACCEPT));
- assert(totk_hint_pad(CONTROLLER_UI_ASSISTANT)&&hintPanel.visible&&totk_hint_pad(CONTROLLER_UI_HELD)&&assistantPaused);
+ assert(totk_hint_pad(CONTROLLER_UI_ASSISTANT)&&hintPanel.visible&&totk_hint_pad(CONTROLLER_UI_HELD)&&!assistantPaused);   // the game runs on
  hintWorking=NO;hintDone=YES;hintHistoryExpanded=NO;hintPagedAnswer=nil;hintShow(@"甲\n乙\n丙\n丁");assert(hintPagesRemain());
  assert(totk_hint_pad(CONTROLLER_UI_ACCEPT)&&[hintText.stringValue isEqual:@"丁"]);
  assert(totk_hint_pad(CONTROLLER_UI_DOWN)&&totk_hint_pad(CONTROLLER_UI_UP));
  assert(totk_hint_pad(CONTROLLER_UI_BACK)&&!hintPanel.visible&&!totk_hint_pad(CONTROLLER_UI_HELD)&&!assistantPaused);
  shotFails=YES;[[NSFileManager defaultManager] removeItemAtPath:hintPath(@"hint-scene.png") error:nil];
- hintOpen();assert(!assistantPaused);   // waiting for the frame
+ hintOpen();assert(!assistantPaused);
+ hintQuestion.stringValue=@"";[hintActions point:nil];   // the frame never arrives: pause anyway, ask without marks
  [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.8]];
- assert(assistantPaused&&!hintSceneReady);hintLayout(0);assert(hintPointButton.hidden);
+ assert(assistantPaused&&!hintSceneReady);
  [hintActions close:nil];shotFails=NO;
+ // runtime_state's changes name what appeared or vanished since the previous observation.
+ sceneExtra=0;assert(!runtimeStateReply(@"d0")[@"changes"]);
+ sceneExtra=1;NSDictionary *changed=runtimeStateReply(@"d1");
+ assert([changed[@"changes"][@"appeared"][0] isEqual:@"SpObj_Switch_A_01"]);
+ sceneExtra=0;NSDictionary *gone=runtimeStateReply(@"d2");
+ assert([gone[@"changes"][@"vanished"][0] isEqual:@"SpObj_Switch_A_01"]);
+ // A sequence is one call for several presses; every step spends the same budget, and a run that does not fit is refused.
+ [@"{\"enabled\":true,\"allow_actions\":true}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ hintActionLimitLoad();assert(hintActionLimit==6);
+ hintWorking=YES;hintActionsGranted=YES;hintActionCount=0;hintID=@"seq";
+ NSUInteger before=syntheticDowns;
+ NSArray *two=@[@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@20},@{@"button":@"down",@"duration_ms":@30,@"wait_ms":@20}];
+ NSDictionary *sequence=runtimeSequence(@"seq",two);
+ assert([sequence[@"ok"] boolValue]);assert(hintActionCount==2);assert(syntheticDowns==before+2);
+ NSMutableArray *seven=[NSMutableArray new];
+ for(int i=0;i<7;i++)[seven addObject:@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@0}];
+ hintActionCount=0;assert([runtimeSequence(@"seq-over",seven)[@"error"] isEqual:@"action_limit"]);
+ NSMutableArray *nine=[NSMutableArray new];
+ for(int i=0;i<9;i++)[nine addObject:@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@0}];
+ assert([runtimeSequence(@"seq-nine",nine)[@"error"] isEqual:@"invalid_steps"]);
+ hintActionCount=0;assert([runtimeSequence(@"seq-bad",@[@{@"button":@"nope",@"duration_ms":@30,@"wait_ms":@0}])[@"error"] isEqual:@"invalid_steps"]);
+ // assistant.json can widen the budget, and the panel reads it before every request.
+ [@"{\"enabled\":true,\"allow_actions\":true,\"action_limit\":3}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ hintActionLimitLoad();assert(hintActionLimit==3);
+ hintActionCount=0;hintWorking=YES;hintActionsGranted=YES;
+ assert([runtimeSequence(@"seq-budget",@[@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@0},@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@0},@{@"button":@"a",@"duration_ms":@30,@"wait_ms":@0}])[@"ok"] boolValue]);
+ assert([runtimeSequence(@"seq-budget-over",two)[@"error"] isEqual:@"action_limit"]);
+ hintWorking=NO;hintActionsGranted=NO;
+ // 指路: the service's answer (no model) becomes an arrow that turns with the camera and leaves when Link is close.
+ [@"{\"enabled\":true}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ hintService=[FakeHintTask new];hintGuideHide();[hintActions guide:nil];
+ NSDictionary *guideAsk=hintJSON(hintPath(@"guide-request.json"));assert([guideAsk[@"id"] isKindOfClass:NSString.class]);
+ void (^guideReply)(NSDictionary *)=^(NSDictionary *target){
+  NSDictionary *ask=hintJSON(hintPath(@"guide-request.json"));   // the newest request, not the one captured above
+  [[NSJSONSerialization dataWithJSONObject:@{@"id":ask[@"id"],@"ok":@YES,@"target":target} options:0 error:nil] writeToFile:hintPath(@"guide-response.json") atomically:YES];
+  hintGuidePoll();};
+ guideReply(@{@"name":@"希多",@"quest":@"主线",@"xyz":@[@0,@0,@(-300)],@"distance_m":@300});
+ assert(hintGuidePanel.visible);hintGuideTick();
+ assert(fabs(hintGuideDistance-303)<6);assert(fabs(hintGuideAngle)<1);   // straight ahead of the camera
+ cameraConvention=1;hintGuideTick();assert(fabs(hintGuideAngle)<1);   // the other axis convention reads the same
+ cameraConvention=0;
+ hintGuideHide();assert(!hintGuidePanel.visible);
+ [hintActions guide:nil];guideAsk=hintJSON(hintPath(@"guide-request.json"));
+ guideReply(@{@"name":@"脚下",@"xyz":@[@1,@2,@8],@"distance_m":@5});
+ assert(hintGuidePanel.visible);hintGuideTick();assert(!hintGuidePanel.visible);   // close enough: the arrow leaves
  [hintTimer invalidate];[hintPanel orderOut:nil];puts("pass: enable preserves config, does not send request, rejects invalid config");
 }}

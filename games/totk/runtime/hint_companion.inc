@@ -129,7 +129,7 @@ static void hintDockLayout(void){
  else if(hintGame.visible&&!hintDock.visible){[hintGame addChildWindow:hintDock ordered:NSWindowAbove];[hintDock orderFront:nil];}
 }
 static void hintOpen(void){
- hintExpanded=YES;hintPause();
+ hintExpanded=YES;
  if(![hintJSON(hintPath(@"assistant.json"))[@"enabled"] boolValue]){hintShowWelcome();return;}
  if(hintSession||hintWorking||hintDone){hintLayout(540);hintMarksNoteOnOpen();[hintPanel makeKeyWindow];[hintPanel makeFirstResponder:hintQuestion];}
  else hintShowReady();

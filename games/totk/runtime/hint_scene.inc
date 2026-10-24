@@ -31,6 +31,8 @@ static void hintPauseWhenSaved(NSUInteger generation,NSDate *asked){
  hintSceneReady=saved;
  if(runtime_assistant_pause)runtime_assistant_pause(1);
  hintLayout(0);
+ // A 指给我看 asked before the panel captured anything waits here: the frame is on screen now, send it.
+ if(hintPointNext&&hintPendingQuestion.length)[hintActions request:nil];
 }
 static void hintPause(void){   // the game stops behind the panel, on a frame that 指给我看 can show the model
  if(hintPauseHeld)return;
@@ -123,8 +125,9 @@ static void hintMarksShow(NSArray *marks){   // over the paused game window, und
 }
 static void hintResume(void){   // the game moves on: the frame and its marks are gone
  BOOL pointed=hintMarks.count>0;
+ BOOL held=hintPauseHeld;
  hintPauseHeld=NO;hintSceneReady=NO;hintShotGeneration++;hintMarksHide();
- if(runtime_assistant_pause)runtime_assistant_pause(0);
+ if(held&&runtime_assistant_pause)runtime_assistant_pause(0);   // never release a pause this panel does not hold
  if(pointed){
   hintMarksCleared=YES;
   hintBubble.stringValue=@"圈画只留在暂停的画面上，游戏继续后已清除。\n按 8 打开对话，可以在当前画面上再指一次。";

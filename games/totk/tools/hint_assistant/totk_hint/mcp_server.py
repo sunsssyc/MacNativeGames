@@ -14,7 +14,7 @@ INSTRUCTIONS = ('The player\'s Tears of the Kingdom game: the newest save and th
                 'the live game), live runtime state, place and item names (Simplified Chinese). Call only the tools a '
                 'question needs; search_text checks names and facts. Game inputs (press_button) are offered only when '
                 'the player allowed this request to act.')
-WRITES = ('screenshot', 'press_button', 'stop_action', 'mark_screen')   # not read-only: they reach into the game
+WRITES = ('screenshot', 'press_button', 'press_sequence', 'stop_action', 'mark_screen')   # not read-only: they reach into the game
 
 
 def _error(id_, code, message):
