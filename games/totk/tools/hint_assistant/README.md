@@ -12,18 +12,17 @@
 
 ## 朗读（可选）
 
-默认关闭。面板上的「朗读」是开关，打开后朗读屏幕上的回复以及之后的每条回复，每段读完自动翻页；设置记在 `assistant.json` 的 `voice.enabled`。收起面板、按 Esc 或发出新问题都会停止朗读。
+默认关闭。面板上的「朗读」是开关，设置记在 `assistant.json` 的 `voice.enabled`。打开后，问题发出时就开始准备声音，回答一边写出来一边按行朗读（写完一句读一句），读到下一段自动翻页；按回车或点文字翻页时，声音跟着跳到那一段。发出新问题或关掉开关就停止。
 
-声音有两种来源：
+声音按 `voice.engine`（默认 `auto`）逐条回答选择：
 
-1. **系统声音**（不用下载）：macOS 自带的中文声音。语音组件没装、还没录参考声音或合成出错时都用它。
-2. **克隆声音**：Qwen3-TTS 0.6B Base 的 4bit MLX 版（`mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit`，Apache-2.0），通过 `mlx-audio==0.6.1` 运行。点面板下方的「下载语音」安装：用游戏助手自己的 Python 3.14 建虚拟环境（约 450 MB）并下载模型（约 1.7 GB），都放在 `~/Library/Application Support/MacNativeGames/TOTK/tts/`，不打包进 App。再点「录我的声音」照着屏幕读一句话（3–20 秒），之后就用这个声音朗读。
+1. **本地克隆**（`local`）：Qwen3-TTS 0.6B Base 的 4bit MLX 版（`mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit`，Apache-2.0），通过 `mlx-audio==0.6.1` 运行，克隆你录的参考声音。`auto` 下只要装好并录过声音就优先用它。`voice.engine` 设为 `local` 时，面板会出现「下载语音」（用助手自己的 Python 3.14 建虚拟环境约 450 MB、下载模型约 1.7 GB，放在 `~/Library/Application Support/MacNativeGames/TOTK/tts/`，不打包进 App）和「录我的声音」（照着屏幕读一句话，3–20 秒）。模型和游戏共用 GPU，所以只在面板打开、游戏暂停时朗读，收起面板就停；空闲 120 秒（`voice.unload_after_seconds`）后释放约 1.9 GB 内存。这个模型没有自带音色：不给参考声音时停不下来（实测“你好”生成了 655 秒），所以必须先录。**只录你自己的声音，或已经同意的人的声音**；不要用游戏角色的配音或从游戏、视频里截取的声音。M1 Max 实测：加载 2.6 秒，预热后约 2 秒合成 6 秒的话。
+2. **Google Chirp 3 HD**（`google`）：用 Vertex 后端同一个 gcloud 登录和项目调用 Cloud Text-to-Speech（项目需启用该 API 并开通结算）。每月前 100 万字符免费，超出按量计费；助手按月统计字符数（`tts/google-usage.json`），到 `voice.google_monthly_chars`（默认 90 万）就不再使用。音色 `voice.google_voice`，默认 `cmn-CN-Chirp3-HD-Leda`，其他中文 Chirp 3 HD 音色也可以用。回答文字会发给 Google 合成。国内网络实测每句约 1–1.7 秒合成好，回答文字出现后约 2 秒开始朗读。
+3. **系统声音**（`system`，或上面两种都不可用、合成出错时）：macOS 自带的中文声音，不联网、不下载。
 
-这个模型没有自带音色：不给参考声音时它停不下来（实测“你好”两个字生成了 655 秒），所以必须先录参考声音。**只录你自己的声音，或已经同意的人的声音**；不要用游戏角色的配音或从游戏、视频里截取的别人的声音。
+Google 和系统声音不占 GPU：收起面板后继续读完；本地克隆随面板收起停止。改 `voice.engine` 后要重启游戏（助手服务启动时读取设置）。
 
-合成只在面板打开、游戏暂停时进行（模型和游戏共用 GPU）：发出问题时先加载模型，回答到达后逐段合成。空闲 120 秒（`voice.unload_after_seconds`）后释放模型，约 1.9 GB 内存。M1 Max 实测：加载 2.6 秒；预热后约 2 秒合成 6 秒的话。
-
-命令行：`run.py voice status`、`run.py voice install`、`run.py voice reference --audio 录音.m4a '录音里的原话'`（换参考声音）、`run.py voice say '一句话' --out a.wav`。头像为生成的露珠风格插画。
+命令行：`run.py voice status`、`run.py voice install`、`run.py voice reference --audio 录音.m4a '录音里的原话'`（换参考声音）、`run.py voice say '一句话' --out a.wav`（本地克隆）。
 
 ## 启用和游戏操作
 

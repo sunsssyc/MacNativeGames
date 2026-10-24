@@ -18,6 +18,13 @@ void runtime_assistant_pause(int on){assistantPaused=on;}
 @property NSMutableArray<NSString *> *said;
 @property BOOL talking;
 @end
+static NSString *silentWav(NSString *folder){   // 0.1 s of 24 kHz 16-bit mono silence
+ NSMutableData *d=[NSMutableData data];uint32_t n=4800,riff=36+n,fmt=16,rate=24000,bytes=48000;uint16_t pcm=1,ch=1,align=2,bits=16;
+ [d appendBytes:"RIFF" length:4];[d appendBytes:&riff length:4];[d appendBytes:"WAVEfmt " length:8];[d appendBytes:&fmt length:4];
+ [d appendBytes:&pcm length:2];[d appendBytes:&ch length:2];[d appendBytes:&rate length:4];[d appendBytes:&bytes length:4];
+ [d appendBytes:&align length:2];[d appendBytes:&bits length:2];[d appendBytes:"data" length:4];[d appendBytes:&n length:4];[d increaseLengthBy:n];
+ NSString *file=[folder stringByAppendingPathComponent:@"silence.wav"];[d writeToFile:file atomically:YES];return file;
+}
 @implementation FakeSpeaker
 -(BOOL)isSpeaking{return self.talking;}
 -(void)speakUtterance:(AVSpeechUtterance *)utterance{if(!self.said)self.said=[NSMutableArray new];[self.said addObject:utterance.speechString];self.talking=YES;}
@@ -113,23 +120,52 @@ int main(int argc,const char **argv){@autoreleasepool{
  NSEvent *ret=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:w.windowNumber context:nil characters:@"\r" charactersIgnoringModifiers:@"\r" isARepeat:NO keyCode:36];
  assert(!totk_hint_key(ret,YES));   // nothing left to show: Return is the game's again
  hintPagedAnswer=nil;hintShow(@"新回答第一行\n二\n三\n四");assert(hintPage==0);   // a new request starts on page oneassert(totk_hint_key(ret,YES));assert(hintPage==1);
- // 朗读 is off by default; switching it on is remembered and, without the voice service, reads with the system voice.
+ // 朗读 is off by default; switching it on is remembered and reads line by line (here the system voice: no service),
+ // turning the page when the voice gets there.
  FakeSpeaker *speaker=[FakeSpeaker new];hintSpeaker=speaker;
+ void (^finishLine)(void)=^{[hintActions speechSynthesizer:speaker didFinishSpeechUtterance:[AVSpeechUtterance speechUtteranceWithString:@""]];
+  [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];};
  assert(!hintReadOn());hintService=nil;hintPagedAnswer=nil;hintShow(answer);
- [hintActions read:nil];assert(hintReadOn());assert([hintJSON(path)[@"enabled"] boolValue]);
- assert(hintReadSystem);assert([speaker.said isEqual:@[@"第一行\n第二行\n第三行"]]);
- [hintActions speechSynthesizer:speaker didFinishSpeechUtterance:[AVSpeechUtterance speechUtteranceWithString:@""]];
- [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
- assert(hintPage==1);assert([speaker.said.lastObject isEqual:@"第四行\n第五行"]);
- [hintActions read:nil];assert(!hintReadOn());assert(!speaker.talking);
- // With the service: reading asks it for the pages; "no_reference" falls back to the system voice and offers recording.
- hintService=[FakeHintTask new];hintPagedAnswer=nil;hintShow(@"甲\n乙");[hintActions read:nil];
- NSDictionary *readRequest=hintJSON(hintPath(@"hint-voice-request.json"));assert([readRequest[@"pages"] isEqual:@[@"甲\n乙"]]);
- [[NSJSONSerialization dataWithJSONObject:@{@"id":readRequest[@"id"],@"status":@"no_reference"} options:0 error:nil] writeToFile:hintPath(@"hint-voice.json") atomically:YES];
- hintVoicePoll();assert(hintReadSystem);assert([speaker.said.lastObject isEqual:@"甲\n乙"]);
+ [hintActions read:nil];assert(hintReadOn());assert([hintVoiceConfig()[@"enabled"] boolValue]);
+ assert(hintReadSystem);assert(([speaker.said isEqual:@[@"第一行"]]));
+ finishLine();finishLine();finishLine();
+ assert(([speaker.said isEqual:@[@"第一行",@"第二行",@"第三行",@"第四行"]]));assert(hintPage==1);
+ [hintActions read:nil];assert(!hintReadOn());assert(!speaker.talking);assert(!hintReadID);
+ // With the service: the lines go to it and its files play in order; when it has no voice ("system") the system voice
+ // takes over, and in "local" mode the panel offers to record a voice. The system voice reads on after the panel closes;
+ // the local clone, which needs the paused game's GPU, stops.
+ [@"{\"enabled\":true,\"voice\":{\"enabled\":false,\"engine\":\"local\"}}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ NSString *wav=silentWav(hintFolder);
+ void (^voiceReply)(NSDictionary *)=^(NSDictionary *fields){
+  [[NSJSONSerialization dataWithJSONObject:fields options:0 error:nil] writeToFile:hintPath(@"hint-voice.json") atomically:YES];hintVoicePoll();};
+ hintOpen();hintService=[FakeHintTask new];hintWorking=NO;hintDone=YES;hintPagedAnswer=nil;hintShow(@"甲\n乙");[hintActions read:nil];
+ NSDictionary *readRequest=hintJSON(hintPath(@"hint-voice-request.json"));assert(([readRequest[@"lines"] isEqual:@[@"甲",@"乙"]]));
+ voiceReply(@{@"id":readRequest[@"id"],@"status":@"working",@"engine":@"google",@"files":@[]});assert(hintReadPlaying<0);
+ voiceReply(@{@"id":readRequest[@"id"],@"status":@"working",@"engine":@"google",@"files":@[wav]});
+ assert(hintPlayer&&hintReadPlaying==0);
+ [hintActions audioPlayerDidFinishPlaying:hintPlayer successfully:YES];[[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+ assert(hintReadLine==1&&hintReadPlaying<0);   // the next line's audio is not there yet
+ voiceReply(@{@"id":readRequest[@"id"],@"status":@"system",@"local":@"no_reference",@"files":@[wav]});
+ assert(hintReadSystem);assert([speaker.said.lastObject isEqual:@"乙"]);
  assert(!hintVoiceSetup.hidden);assert([hintVoiceSetup.title isEqual:@"录我的声音"]);
- [hintActions close:nil];assert(!speaker.talking);
+ [hintActions close:nil];assert(speaker.talking&&hintReadID);   // the system voice reads on
+ [hintActions read:nil];assert(!hintReadOn());assert(!speaker.talking&&!hintReadID);
+ hintOpen();hintWorking=NO;hintDone=YES;hintPagedAnswer=nil;hintShow(@"丙\n丁");[hintActions read:nil];
+ readRequest=hintJSON(hintPath(@"hint-voice-request.json"));
+ voiceReply(@{@"id":readRequest[@"id"],@"status":@"working",@"engine":@"local",@"files":@[wav]});assert(hintPlayer);
+ [hintActions close:nil];assert(!hintPlayer&&!hintReadID);
+ assert([hintJSON(hintPath(@"hint-voice-request.json"))[@"cancel"] boolValue]);
  [hintActions read:nil];assert(!hintReadOn());
+ // A question asked with 朗读 on is read while it streams: a finished sentence before the answer is done.
+ [@"{\"enabled\":true,\"voice\":{\"enabled\":true}}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ [speaker.said removeAllObjects];speaker.talking=NO;
+ hintOpen();hintWorking=NO;hintDone=YES;hintQuestion.stringValue=@"去哪";[hintActions send:nil];
+ assert([hintJSON(hintPath(@"hint-request.json"))[@"read"] boolValue]);assert([hintReadID isEqual:hintID]);
+ [[NSJSONSerialization dataWithJSONObject:@{@"id":hintID,@"session":hintSession,@"status":@"working",@"stage":@"正在回答",@"partial":@"往北走。\n再找"} options:0 error:nil] writeToFile:hintPath(@"hint-response.json") atomically:YES];
+ hintPoll();voiceReply(@{@"id":hintID,@"status":@"system",@"local":@"missing"});
+ assert(([speaker.said isEqual:@[@"往北走。"]]));finishLine();assert(speaker.said.count==1);   // "再找" is still being written
+ [hintActions close:nil];assert(!hintReadID);
+ [@"{\"enabled\":true}" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
  // While the model works the panel says what it is doing, then types the answer out on its pages; the page the player
  // turned to stays when the finished answer arrives.
  NSString *responsePath=hintPath(@"hint-response.json");

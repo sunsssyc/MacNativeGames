@@ -24,9 +24,12 @@ DEFAULTS = {
     'romfs': None,                # game data folder (romfs.bin + runtime-index.bin or index.json); found by itself
     'save_root': None,            # folder with <user id>/slot_NN; default: the player's profile
     'text_language': 'CNzh',      # game text language for names and quest logs
-    # 朗读 (voice.py): read answers aloud. Off by default; the panel's 朗读 button switches it and installs the voice
-    # (Qwen3-TTS 0.6B 4-bit, about 2 GB) only when the player asks; it clones a recorded reference voice.
-    'voice': {'enabled': False, 'unload_after_seconds': 120},
+    # 朗读 (voice.py): read answers aloud, line by line as they are written. Off by default (the panel's 朗读 button).
+    # engine "auto": the local Qwen3-TTS clone once installed with a recorded reference, else Google Chirp 3 HD with the
+    # gcloud sign-in (free up to 1 million characters a month; google_monthly_chars stops short of that), else the
+    # macOS system voice. "local" also shows the panel's 下载语音 / 录我的声音; "google" and "system" use only that one.
+    'voice': {'enabled': False, 'engine': 'auto', 'google_voice': 'cmn-CN-Chirp3-HD-Leda', 'google_monthly_chars': 900_000,
+              'unload_after_seconds': 120},
     'claude_code': {'path': None, 'model': 'opus', 'effort': 'low'},
     'codex': {'path': None, 'model': None, 'effort': 'low'},
     # Vertex AI: Claude Code with its Vertex provider (vertex-claude-code) and the direct REST client (vertex)
@@ -70,8 +73,14 @@ def load(path=None):
     for key in ('claude_code', 'codex', 'vertex', 'voice'):
         if not isinstance(config[key], dict):
             raise ValueError(f'{path}: {key} must be an object')
-    if not isinstance(config['voice'].get('enabled'), bool):
+    voice = config['voice']
+    if not isinstance(voice.get('enabled'), bool):
         raise ValueError(f'{path}: voice.enabled must be true or false')
+    if voice.get('engine') not in ('auto', 'local', 'google', 'system'):
+        raise ValueError(f'{path}: voice.engine must be auto, local, google or system')
+    chars = voice.get('google_monthly_chars')
+    if isinstance(chars, bool) or not isinstance(chars, int) or chars < 0:
+        raise ValueError(f'{path}: voice.google_monthly_chars must be a whole number of characters')
     tier = config.get('tier_default')
     config['tier_default'] = tier if tier in (1, 2, 3) else 1
     return config

@@ -29,6 +29,9 @@ static BOOL hintReadOn(void);
 static BOOL hintReadSet(BOOL on);
 static void hintReadAnswer(void);
 static void hintReadStop(void);
+static void hintReadFollow(NSString *requestID);
+static void hintReadPanelClosed(void);
+static NSString *hintReadID;
 static void hintShowSetup(NSString *title);
 static void hintVoicePoll(void);
 static void hintVoiceWrite(NSDictionary *value);
@@ -301,7 +304,7 @@ static BOOL hintWrite(NSDictionary *value) {
  return NO;
 }
 -(void)close:(id)sender{
- (void)sender;hintVoiceEnd(YES);hintRecordEnd(NO);hintReadStop();hintActionsEnd();hintActionsArmed=NO;if(hintWorking)hintWrite(@{@"id":hintID,@"session":hintSession,@"cancel":@YES});
+ (void)sender;hintVoiceEnd(YES);hintRecordEnd(NO);if(hintWorking)hintReadStop();else hintReadPanelClosed();hintActionsEnd();hintActionsArmed=NO;if(hintWorking)hintWrite(@{@"id":hintID,@"session":hintSession,@"cancel":@YES});
  hintWorking=NO;hintExpanded=NO;if(runtime_assistant_pause)runtime_assistant_pause(0);[hintPanel orderOut:nil];hintDockLayout();
 }
 -(void)request:(id)sender{
@@ -380,7 +383,8 @@ static void hintPoll(void) {
    hintText.toolTip=hintDone?nil:text;
    if(hintDone&&[text isKindOfClass:NSString.class]){[hintHistory addObject:[@"露珠\n" stringByAppendingString:text]];while(hintHistory.count>24)[hintHistory removeObjectAtIndex:0];}
    hintShow(hintDone&&[text isKindOfClass:NSString.class]?text:@"这次没能取得提示。\n你可以稍后重新求助。");
-   if(hintDone&&hintReadOn())hintReadAnswer();
+   if(hintDone&&hintReadOn()&&!hintReadID)hintReadAnswer();   // switched on while it worked
+   if(!hintDone&&[hintReadID isEqual:hintID])hintReadStop();
    return;
   }
  }
@@ -445,7 +449,8 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  if(escape){
   if(hintRecording){hintRecordEnd(NO);return YES;}
   if(hintListening||hintVoiceFinishing){hintVoiceEnd(YES);return YES;}
-  hintReadStop();hintActionsEnd();hintActionsArmed=NO;
+  if(hintWorking)hintReadStop();else hintReadPanelClosed();   // a request being cancelled is not read on
+  hintActionsEnd();hintActionsArmed=NO;
   if(hintWorking)hintWrite(@{@"id":hintID,@"session":hintSession,@"cancel":@YES});
   hintWorking=NO;hintExpanded=NO;if(runtime_assistant_pause)runtime_assistant_pause(0);[hintPanel orderOut:nil];hintDockLayout();return YES;
  }
@@ -467,12 +472,14 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  if(hintPendingQuestion.length)request[@"question"]=hintPendingQuestion;
  hintActionsGranted=hintPendingQuestion.length&&hintActionsArmed&&[config[@"allow_actions"] boolValue];hintActionsArmed=NO;hintActionCount=0;
  if(hintActionsGranted)request[@"actions"]=@YES;
+ BOOL reading=hintReadOn();
+ if(reading)request[@"read"]=@YES;   // read aloud line by line as it is written; the voice gets ready meanwhile
  if(!hintWrite(request)){
   hintShow(@"无法写入求助请求。");return YES;
  }
  hintReadStop();hintPagedAnswer=nil;hintPages=nil;hintPage=0;hintPartial=hintStage=nil;hintRevealed=0;hintRevealStop();
- if(hintReadOn())hintVoiceWrite(@{@"id":NSUUID.UUID.UUIDString,@"warm":@YES});   // the voice loads while the model thinks
  if(hintPendingQuestion.length)[hintHistory addObject:[@"你\n" stringByAppendingString:hintPendingQuestion]];
  hintLastQuestion=hintPendingQuestion;hintPendingQuestion=nil;hintQuestion.stringValue=@"";[hintPanel makeFirstResponder:nil];[hintGame makeKeyWindow];
- hintDone=NO;hintWorking=YES;hintStarted=NSDate.date;hintShow(@"让我想想……\n\nEsc 取消");return YES;
+ hintDone=NO;hintWorking=YES;hintStarted=NSDate.date;if(reading)hintReadFollow(hintID);
+ hintShow(@"让我想想……\n\nEsc 取消");return YES;
 }

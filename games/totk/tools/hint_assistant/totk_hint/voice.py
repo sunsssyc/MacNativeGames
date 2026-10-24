@@ -1,25 +1,32 @@
-"""朗读 (optional): the panel's answer read aloud by Qwen3-TTS 0.6B Base (4-bit MLX), cloning a reference voice.
+"""朗读 (optional): the panel's answer read aloud, line by line as it is written.
 
-Off by default (assistant.json "voice": {"enabled": false}). Nothing is installed until the player asks for it in the
-panel (or `run.py voice install`); until then, and whenever this voice cannot answer, the game reads with the macOS
-system voice. Everything lives in the game's data folder, under tts/:
+Off by default (assistant.json "voice": {"enabled": false}). Three voices, chosen per answer by voice.engine ("auto"):
+    local    Qwen3-TTS 0.6B Base (4-bit MLX) cloning a recorded reference voice; used once it is installed and a
+             reference recorded (the panel's 下载语音 / 录我的声音 when voice.engine is "local", or `run.py voice`).
+             It shares the GPU with the game, so it reads only behind the open panel, while the game is paused.
+    google   Chirp 3 HD on Google Cloud Text-to-Speech with the gcloud sign-in of the Vertex backend: 1 million
+             characters a month free, then billed; voice.google_monthly_chars (900,000) stops it short of that.
+    (none)   the game reads with the macOS system voice ("system" below): no service, nothing downloaded.
 
+The local voice lives in the game's data folder, under tts/:
     venv/                 a Python environment with mlx-audio, made from this service's own Python
     hf/                   the model (Hugging Face cache)
     reference.wav + .txt  the voice to clone and what it says: the player's own recording, or a friend's who agreed.
                           The Base model has no voice of its own (without a reference it does not stop: "你好" ran to
-                          655 s of audio in testing), so until there is a reference the game reads with the system voice.
+                          655 s of audio in testing).
 
-The game (runtime/hint_voice.inc) writes hint-voice-request.json. Reading answers in hint-voice.json:
-    {"id": "...", "pages": ["...", "..."]}  ->  {"id": "...", "status": "working"|"done", "files": ["/…/0.wav", null]}
-    {"id": "...", "cancel": true}               the panel was closed or reading was switched off
-    {"id": "...", "warm": true}             load the model while the answer is being worked out (no reply)
-    status "missing": not installed (or being installed); "no_reference": no voice to clone yet; "error": with "text".
-Setting up answers in hint-voice-setup.json, so a page being read never hides an install's progress:
+Reading: a hint request with "read": true is read while it streams (Service.work feeds the job), and the game writes
+hint-voice-request.json for an answer already on screen. Replies in hint-voice.json, one file per line of the answer:
+    {"id": "...", "lines": ["...", "..."]}  ->  {"id": "...", "status": "working"|"done", "engine": "google",
+                                                 "files": ["/…/0.wav", "/…/1.wav"]}
+    {"id": "...", "cancel": true}               the panel was closed (local voice) or reading was switched off
+    status "system": no voice here (or it failed, "text" says why): the game's system voice reads from that line on;
+    "local" then says why the clone is not used: "missing", "no_reference", "installing" or "ready".
+Setting up the local voice answers in hint-voice-setup.json, so a line being read never hides an install's progress:
     {"id": "...", "install": true}          ->  {"id": "...", "status": "installing", "text": "..."} ... "installed"
     {"id": "...", "reference": "/…/take.caf", "text": "..."}  ->  "reference_saved" (the panel's 录我的声音)
-    Pages are synthesized in order, while the game is paused
-    behind the panel (the model shares the GPU with the game), and the worker is stopped after idle seconds."""
+The local model is unloaded after voice.unload_after_seconds idle."""
+import base64
 import json
 import os
 import queue
@@ -28,6 +35,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from .romfs import DATA_DIR
@@ -38,8 +47,11 @@ WORKER = Path(__file__).resolve().with_name('tts_worker.py')
 REQUEST = 'hint-voice-request.json'
 RESPONSE = 'hint-voice.json'
 SETUP = 'hint-voice-setup.json'
-MAX_PAGES = 4
-MAX_PAGE_CHARS = 160
+MAX_LINES = 12
+MAX_LINE_CHARS = 120
+GOOGLE_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize'
+GOOGLE_VOICE = 'cmn-CN-Chirp3-HD-Leda'   # "youthful"; any cmn-CN Chirp 3 HD voice in voice.google_voice
+SENTENCE_ENDS = '。！？!?…'
 
 
 def _write(path, value):
@@ -53,6 +65,9 @@ class VoiceError(Exception):
 
 
 class Voice:
+    """The local voice: Qwen3-TTS through a worker process in its own Python environment."""
+    name = 'local'
+
     def __init__(self, folder=None, config=None, log=print):
         self.folder = Path(folder) if folder else DATA_DIR
         self.root = self.folder / 'tts'
@@ -188,6 +203,16 @@ class Voice:
             raise VoiceError(reply.get('error') or '朗读失败')
         return reply.get('seconds'), reply.get('audio_seconds')
 
+    def ready(self):
+        return self.installed() and self.reference() is not None
+
+    def prepare(self):
+        """Load the model and encode the reference once, so the first line does not wait for either."""
+        self.synthesize('嗯。', self.root / 'warm.wav', self.reference())
+
+    def speak(self, text, out):
+        self.synthesize(text, out, self.reference())
+
     def reference(self):
         """(wav, its text) of the voice to clone, or None."""
         wav, txt = self.root / 'reference.wav', self.root / 'reference.txt'
@@ -212,39 +237,215 @@ class Voice:
         return out
 
 
-def pages_of(value):
-    pages = value.get('pages') if isinstance(value, dict) else None
-    if not isinstance(pages, list) or not pages or len(pages) > MAX_PAGES:
+class GoogleVoice:
+    """Chirp 3 HD on Google Cloud Text-to-Speech, signed in like the Vertex backend (gcloud). Characters are counted per
+    month in tts/google-usage.json and the voice stops at voice.google_monthly_chars, short of the paid range."""
+    name = 'google'
+
+    def __init__(self, folder, config, log=print):
+        self.config = config
+        self.settings = config.get('voice') or {}
+        self.usage = Path(folder) / 'tts' / 'google-usage.json'
+        self.log = log
+
+    def used(self):
+        try:
+            return int(json.loads(self.usage.read_text()).get(time.strftime('%Y-%m'), 0))
+        except (OSError, ValueError, AttributeError):
+            return 0
+
+    def left(self):
+        return self.settings.get('google_monthly_chars', 900_000) - self.used()
+
+    def ready(self):
+        from .vertex import gcloud, project_and_region
+        return bool(gcloud(self.config)) and bool(project_and_region(self.config)[0]) and self.left() > 0
+
+    def prepare(self):
+        self._token()   # the sign-in, cached for 40 minutes
+
+    def _token(self):
+        from .backends import BackendError
+        from .vertex import VertexREST
+        try:
+            return VertexREST(self.config).token()
+        except BackendError as e:
+            raise VoiceError(str(e)) from None
+
+    def speak(self, text, out):
+        if len(text) > self.left():
+            raise VoiceError('本月 Google 朗读额度已用完')
+        from .vertex import project_and_region
+        project, _ = project_and_region(self.config)
+        body = {'input': {'text': text},
+                'voice': {'languageCode': 'cmn-CN', 'name': self.settings.get('google_voice') or GOOGLE_VOICE},
+                'audioConfig': {'audioEncoding': 'LINEAR16', 'sampleRateHertz': 24000}}
+        request = urllib.request.Request(GOOGLE_URL, data=json.dumps(body, ensure_ascii=False).encode(), headers={
+            'Authorization': f'Bearer {self._token()}', 'x-goog-user-project': project,
+            'Content-Type': 'application/json; charset=utf-8'})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                audio = base64.b64decode(json.load(response)['audioContent'])   # a WAV file, header included
+        except urllib.error.HTTPError as e:
+            raise VoiceError(f'Google 朗读失败：HTTP {e.code}') from None
+        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+            raise VoiceError(f'Google 朗读失败：{e}') from None
+        tmp = Path(f'{out}.part')
+        tmp.write_bytes(audio)
+        tmp.replace(out)
+        counts = {}
+        try:
+            counts = json.loads(self.usage.read_text())
+        except (OSError, ValueError):
+            pass
+        month = time.strftime('%Y-%m')
+        counts = {month: int(counts.get(month, 0)) + len(text)}   # only this month is kept
+        self.usage.parent.mkdir(parents=True, exist_ok=True)
+        _write(self.usage, counts)
+
+
+def lines_of(text):
+    return [line.strip() for line in (text or '').split('\n') if line.strip()]
+
+
+def finished_lines(text, final):
+    """The lines of an answer being written that are finished: all once final, else all but the last unless the last
+    already ends a sentence."""
+    lines = lines_of(text)
+    if not final and lines and not lines[-1].endswith(tuple(SENTENCE_ENDS)):
+        lines = lines[:-1]
+    return lines
+
+
+def request_lines(value):
+    lines = value.get('lines') if isinstance(value, dict) else None
+    if not isinstance(lines, list) or not lines or len(lines) > MAX_LINES:
         return None
-    if not all(isinstance(p, str) and 0 < len(p.strip()) <= MAX_PAGE_CHARS for p in pages):
+    if not all(isinstance(line, str) and 0 < len(line.strip()) <= MAX_LINE_CHARS for line in lines):
         return None
-    return [p.strip() for p in pages]
+    return [line.strip() for line in lines]
+
+
+class Job:
+    """One answer being read: its lines so far, more to come until final."""
+
+    def __init__(self, job_id, lines=(), final=True):
+        self.id = job_id
+        self.lines = list(lines)
+        self.final = final
+        self.cancel = threading.Event()
+        self.wake = threading.Condition()
 
 
 class VoiceService:
-    """The hint service's side of 朗读: one reading job at a time (a new request or a cancel stops the current one),
-    and one setup job (install or a new reference) that reading requests never interrupt."""
+    """The hint service's side of 朗读: one reading job at a time (a new one or a cancel stops it), and one setup job
+    (install or a new reference) that reading never interrupts."""
 
     def __init__(self, folder, config, log):
         self.voice = Voice(folder, config, log)
+        self.google = GoogleVoice(self.voice.folder, config, log)
+        self.settings = config.get('voice') or {}
         self.folder = self.voice.folder
         self.log = log
-        self.current = None   # (id, cancel event, thread) of the reading job
-        self.setup = None     # the setup thread
+        self.job = None
+        self.setup = None
         self.lock = threading.Lock()
-
-    def respond(self, request_id, status, **fields):
-        with self.lock:
-            if not self.current or self.current[0] != request_id or self.current[1].is_set():
-                return   # superseded or cancelled: a page that was already being made is dropped
-            _write(self.folder / RESPONSE, dict({'id': request_id, 'status': status, 'time': time.time()}, **fields))
-
-    def respond_setup(self, request_id, status, **fields):
-        _write(self.folder / SETUP, dict({'id': request_id, 'status': status, 'time': time.time()}, **fields))
 
     def installing(self):
         return self.setup is not None and self.setup.is_alive()
 
+    def local(self):
+        """The local clone's state, for the panel's 下载语音 / 录我的声音."""
+        if self.installing():
+            return 'installing'
+        return 'missing' if not self.voice.installed() else 'no_reference' if self.voice.reference() is None else 'ready'
+
+    def engine(self):
+        """The voice for a new answer: the cloned one once it is set up, else Google, else None (the system voice)."""
+        choice = self.settings.get('engine', 'auto')
+        if choice in ('auto', 'local') and not self.installing() and self.voice.ready():
+            return self.voice
+        if choice in ('auto', 'google') and self.google.ready():
+            return self.google
+        return None
+
+    def respond(self, job, status, **fields):
+        with self.lock:
+            if self.job is not job or job.cancel.is_set():
+                return   # superseded or cancelled: a line that was already being made is dropped
+            _write(self.folder / RESPONSE, dict({'id': job.id, 'status': status, 'time': time.time()}, **fields))
+
+    def respond_setup(self, request_id, status, **fields):
+        _write(self.folder / SETUP, dict({'id': request_id, 'status': status, 'time': time.time()}, **fields))
+
+    # reading ------------------------------------------------------------------------------------------------------------
+    def stop(self, job_id=None):
+        with self.lock:
+            job = self.job
+            if job and (job_id is None or job.id == job_id):
+                job.cancel.set()
+                self.job = None
+        if job:
+            with job.wake:
+                job.wake.notify_all()
+
+    def start(self, job_id, lines=(), final=True):
+        """Read lines (more follow through feed until final); the job before stops."""
+        self.stop()
+        job = Job(str(job_id), lines, final)
+        with self.lock:
+            self.job = job
+        threading.Thread(target=self.read, args=(job,), daemon=True).start()
+        return job
+
+    def feed(self, job_id, text, final=False):
+        """The streaming answer of a reading job: its finished lines so far."""
+        with self.lock:
+            job = self.job
+        if not job or job.id != str(job_id):
+            return
+        with job.wake:
+            job.lines = finished_lines(text, final)
+            job.final = final
+            job.wake.notify_all()
+
+    def read(self, job):
+        engine = self.engine()
+        if engine is None:
+            self.respond(job, 'system', text='没有可用的朗读声音', local=self.local())
+            return
+        out = self.folder / 'hint-audio'
+        shutil.rmtree(out, ignore_errors=True)   # the answer before this one
+        out.mkdir(parents=True, exist_ok=True)
+        files, spoken = [], []   # spoken: the text of each file, to notice a line rewritten while streaming
+        try:
+            engine.prepare()
+            while True:
+                with job.wake:
+                    while not job.cancel.is_set():
+                        same = next((k for k, text in enumerate(spoken) if k >= len(job.lines) or job.lines[k] != text),
+                                    len(spoken))
+                        del files[same:], spoken[same:]   # lines that changed are made again
+                        if len(spoken) < len(job.lines) or job.final:
+                            break
+                        job.wake.wait(0.5)
+                    if job.cancel.is_set():
+                        return
+                    if len(spoken) >= len(job.lines):
+                        break
+                    i, line = len(spoken), job.lines[len(spoken)]
+                path = out / f'{job.id[:12]}-{i}-{time.monotonic_ns() % 10**9}.wav'
+                engine.speak(line, path)
+                files.append(str(path))
+                spoken.append(line)
+                self.respond(job, 'working', engine=engine.name, files=files)
+        except VoiceError as e:
+            self.log(f'[voice] {engine.name}: {e}')
+            self.respond(job, 'system', engine=engine.name, files=files, text=str(e), local=self.local())
+            return
+        self.respond(job, 'done', engine=engine.name, files=files)
+
+    # setup --------------------------------------------------------------------------------------------------------------
     def handle(self, request):
         request_id = request.get('id')
         if not isinstance(request_id, str):
@@ -257,17 +458,13 @@ class VoiceService:
             self.setup = threading.Thread(target=target, args=(request,), daemon=True)
             self.setup.start()
             return
-        with self.lock:
-            if self.current:
-                self.current[1].set()
-            if request.get('cancel'):
-                self.current = None
-                return
-            cancel = threading.Event()
-            target = self.warm if request.get('warm') else self.speak
-            thread = threading.Thread(target=target, args=(request, cancel), daemon=True)
-            self.current = (request_id, cancel, thread)
-        thread.start()
+        if request.get('cancel'):
+            self.stop(request_id)
+            return
+        lines = request_lines(request)
+        if lines is None:
+            return
+        self.start(request_id, lines, final=True)
 
     def install(self, request):
         request_id = request['id']
@@ -280,16 +477,6 @@ class VoiceService:
         self.log('[voice] installed')
         self.respond_setup(request_id, 'installed', text='语音已安装', reference=self.voice.reference() is not None)
 
-    def warm(self, request, cancel):
-        """Load the model and encode the reference once, so the first page does not wait for either."""
-        reference = self.voice.reference()
-        if self.installing() or not self.voice.installed() or reference is None:
-            return
-        try:
-            self.voice.synthesize('嗯。', self.voice.root / 'warm.wav', reference)
-        except VoiceError as e:
-            self.log(f'[voice] warm-up failed: {e}')
-
     def save(self, request):
         try:
             self.voice.set_reference(request['reference'], request.get('text'))
@@ -299,41 +486,9 @@ class VoiceService:
         self.log('[voice] reference voice saved')
         self.respond_setup(request['id'], 'reference_saved', text='已保存你的声音', installed=self.voice.installed())
 
-    def speak(self, request, cancel):
-        request_id, pages = request['id'], pages_of(request)
-        if pages is None:
-            self.respond(request_id, 'error', text='朗读请求无效')
-            return
-        if self.installing() or not self.voice.installed():
-            self.respond(request_id, 'missing', text='语音正在安装' if self.installing() else '语音模型尚未安装')
-            return
-        reference = self.voice.reference()
-        if reference is None:
-            self.respond(request_id, 'no_reference', text='还没有录参考声音')
-            return
-        out = self.folder / 'hint-audio'
-        if out.is_dir():
-            shutil.rmtree(out, ignore_errors=True)   # last answer's pages
-        out.mkdir(parents=True, exist_ok=True)
-        files = [None] * len(pages)
-        try:
-            self.respond(request_id, 'working', files=files)
-            for i, page in enumerate(pages):
-                if cancel.is_set():
-                    return
-                path = out / f'{request_id[:12]}-{i}.wav'
-                took, length = self.voice.synthesize(page, path, reference)
-                files[i] = str(path)
-                self.log(f'[voice] page {i + 1}/{len(pages)}: {length} s of audio in {took} s')
-                self.respond(request_id, 'working' if i + 1 < len(pages) else 'done', files=files)
-        except VoiceError as e:
-            self.log(f'[voice] failed: {e}')
-            self.respond(request_id, 'error', text=str(e), files=files)
-
     def poll(self):
         self.voice.idle()
 
     def close(self):
-        if self.current:
-            self.current[1].set()
+        self.stop()
         self.voice.stop()

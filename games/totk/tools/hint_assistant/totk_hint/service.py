@@ -3,6 +3,7 @@
 The game (runtime/hint_overlay.m, key 8) writes hint-request.json next to its other files:
     {"id": 7, "session": 6, "tier": 0, "time": 1792737015}       tier 0: assistant.json tier_default
     {"id": 7, "session": 6, "question": "...", "actions": true}   a question the player allowed to press buttons
+    {"id": 7, "session": 6, "read": true}                         read the answer aloud as it is written (voice.py)
     {"id": 7, "session": 6, "cancel": true}                       Esc while the hint is being worked out
 and shows hint-response.json:
     {"id": 7, "session": 6, "tier": 1, "status": "working"|"done"|"error"|"cancelled", "text": "...",
@@ -133,6 +134,9 @@ class Service:
         # Input tools only when assistant.json allows them and the player allowed this question in the panel.
         actions = bool(self.config.get('allow_actions')) and request.get('actions') is True and bool(question)
         limit = self.config['total_timeout_seconds']
+        reading = request.get('read') is True
+        if reading:   # read line by line as the answer streams; the voice gets ready while the model works
+            self.voice.start(request['id'], final=False)
         shown = {'backend': None, 'stage': '正在思考', 'partial': '', 'written': 0.0, 'timer': None, 'finished': False}
         shown_lock = threading.Lock()
 
@@ -174,6 +178,8 @@ class Service:
             elif kind == 'text' and clean(value) != shown['partial']:
                 shown.update(stage='正在回答', partial=clean(value))
                 show()
+            if reading:
+                self.voice.feed(request['id'], shown['partial'])
         t0 = time.monotonic()
         scene_image = None
         candidate = request.get('scene_image')
@@ -187,19 +193,24 @@ class Service:
                           allow_actions=actions, on_event=event)
         except backendmod.Cancelled:
             finish()
+            self.voice.stop(str(request['id']))
             self.log(f'[hint] request {request.get("id")} cancelled')
             self.respond(request, 'cancelled', tier=tier, text='', next_tier=None)
             return
         except Exception as e:   # the panel says what went wrong instead of waiting forever
             finish()
+            self.voice.stop(str(request['id']))
             self.log(f'[hint] request {request.get("id")} failed: {e}')
             self.respond(request, 'error', tier=tier, text=f'这次没能给出提示：{e}'[:300], seconds=round(time.monotonic() - t0, 1),
                          next_tier=None)
             return
         finish()
         if cancel.is_set():
+            self.voice.stop(str(request['id']))
             self.respond(request, 'cancelled', tier=tier, text='', next_tier=None)
             return
+        if reading:
+            self.voice.feed(request['id'], result['text'], final=True)
         with self.lock:
             if cancel.is_set() or (self.current and self.current[0] != request.get('id')):
                 return
