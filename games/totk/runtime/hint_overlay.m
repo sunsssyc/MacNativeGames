@@ -97,12 +97,18 @@ static NSColor *hintAccent(void){return [NSColor colorWithCalibratedRed:0.88 gre
 static NSColor *hintSurface(void){return [NSColor colorWithCalibratedRed:0.055 green:0.06 blue:0.045 alpha:1];}
 static BOOL hintActionsAllowed(void){return [hintJSON(hintPath(@"assistant.json"))[@"allow_actions"] boolValue];}
 static void hintActionsEnd(void){hintActionsGranted=NO;hintRuntimeStop();}
-// The same inset and divider geometry frame every step of the assistant flow.
+#include "hint_panel_frame.inc"
+// The same inset and divider geometry frame every step of the assistant flow; the header moves the panel, the lower
+// corners resize it (hint_panel_frame.inc).
 @interface TOTKHintSurface:NSView
 @end
 @implementation TOTKHintSurface
+-(void)mouseDown:(NSEvent *)event{hintPanelGrabBegin(event,self);}
+-(void)mouseDragged:(NSEvent *)event{hintPanelGrabMove(event);}
+-(void)mouseUp:(NSEvent *)event{hintPanelGrabEnd(event);}
+-(void)resetCursorRects{hintPanelCursorRects(self);}
 -(void)drawRect:(NSRect)dirty{
- (void)dirty;[hintSurface() setFill];NSRectFill(self.bounds);
+ (void)dirty;[hintSurface() setFill];NSRectFill(self.bounds);hintPanelDrawGrips(self.bounds.size);
  CGFloat w=NSWidth(self.bounds),h=NSHeight(self.bounds);
  [[hintInk() colorWithAlphaComponent:0.32] setStroke];
  for(NSNumber *position in @[@(h-62)]){
@@ -210,16 +216,18 @@ static NSFont *hintFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-R
 static TOTKHintActions *hintActions;
 static void hintLayout(CGFloat height){
  (void)height;
- CGFloat w=MIN(380,NSWidth(hintGame.contentView.bounds)-40),bodyWidth=w-40;
+ CGFloat w=hintPanelWidth(MIN(380,NSWidth(hintGame.contentView.bounds)-40)),bodyWidth=w-40;   // the player's when set
  hintText.font=hintFont(14);
  NSRect measured=[hintText.stringValue boundingRectWithSize:NSMakeSize(bodyWidth,CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin|NSStringDrawingUsesFontLeading attributes:@{NSFontAttributeName:hintText.font}];
- CGFloat bodyHeight=MAX(52,ceil(NSHeight(measured))+12);
+ CGFloat bodyHeight=MAX(52,MAX(ceil(NSHeight(measured))+12,hintHistoryListHeight()));   // 历史's list: its rows
  CGFloat h=MIN(MAX(248,bodyHeight+224),MIN(420,NSHeight(hintGame.contentView.bounds)-40));
  if(hintWelcome)h=330;
+ h=hintPanelHeight(h);
  NSRect f=[hintGame convertRectToScreen:hintGame.contentView.bounds];
  CGFloat bottom=MIN(MAX(40,NSHeight(f)*0.18),MAX(20,NSHeight(f)-h-20));
  // The panel sits on the right, or on the left while 指给我看 marks would be under it (hint_scene.inc).
- [hintPanel setFrame:NSMakeRect(hintPanelLeft?NSMinX(f)+24:NSMaxX(f)-w-24,NSMinY(f)+bottom,w,h) display:NO];
+ [hintPanel setFrame:hintPanelPlace(NSMakeRect(hintPanelLeft?NSMinX(f)+24:NSMaxX(f)-w-24,NSMinY(f)+bottom,w,h)) display:NO];
+ [hintPanel invalidateCursorRectsForView:hintPanel.contentView];hintPanel.contentView.needsDisplay=YES;
  hintTitle.frame=NSMakeRect(64,h-47,w-148,26);hintTitle.font=hintFont(18);hintTitle.alignment=NSTextAlignmentLeft;
  hintPortrait.frame=NSMakeRect(20,h-56,36,46);
  hintBack.title=hintWorking?@"取消":@"收起";hintBack.toolTip=@"收起对话 · Esc";

@@ -62,6 +62,9 @@ static NSString *hintHistoryTranscript(NSDictionary *session){
  }
  return [blocks componentsJoinedByString:@"\n\n"];
 }
+static CGFloat hintHistoryListHeight(void){   // the panel's body while 历史 shows the list: room for its rows (at most 7)
+ return hintHistoryExpanded&&!hintHistoryOpen?MIN(7,hintSavedSessions().count)*50:0;
+}
 static NSString *hintHistoryButtonTitle(void){return !hintHistoryExpanded?@"历史":hintHistoryOpen?@"返回列表":@"最新回复";}
 
 // One conversation in the list: its title, and when / where / who / how long in a smaller line; lit while hovered.

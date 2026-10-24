@@ -119,14 +119,21 @@ static void hintVoiceBegin(void){
  if(hintListening||hintVoiceFinishing||hintWorking)return;
  if(![hintJSON(hintPath(@"assistant.json"))[@"enabled"] boolValue]){hintOpen();return;}
  SFSpeechRecognizerAuthorizationStatus speech=[SFSpeechRecognizer authorizationStatus];
+ /* The first time, macOS asks for speech recognition and then for the microphone; one click goes through both and
+    then listens (it once took a click per question and another to start, 2026-10-24), unless the panel was closed. */
  if(speech==SFSpeechRecognizerAuthorizationStatusNotDetermined){
-  hintVoiceNotice(@"首次使用需要语音识别授权。授权后再次点击语音。");
-  [SFSpeechRecognizer requestAuthorization:^(SFSpeechRecognizerAuthorizationStatus status){dispatch_async(dispatch_get_main_queue(),^{hintVoiceNotice(status==SFSpeechRecognizerAuthorizationStatusAuthorized?@"语音识别已授权 · 再次点击语音继续":@"语音识别未授权 · 仍可点击露珠打字");});}];return;
+  hintVoiceNotice(@"首次使用需要语音识别和麦克风授权，同意后就开始听");
+  [SFSpeechRecognizer requestAuthorization:^(SFSpeechRecognizerAuthorizationStatus status){dispatch_async(dispatch_get_main_queue(),^{
+   if(status!=SFSpeechRecognizerAuthorizationStatusAuthorized){hintVoiceNotice(@"语音识别未授权 · 仍可点击露珠打字");return;}
+   if(hintExpanded)hintVoiceBegin();});}];return;   // on to the microphone
  }
  if(speech!=SFSpeechRecognizerAuthorizationStatusAuthorized){hintVoiceNotice(@"语音识别未授权 · 可在系统设置中开启，或直接打字");return;}
  AVAuthorizationStatus mic=[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
  if(mic==AVAuthorizationStatusNotDetermined){
-  [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL allowed){dispatch_async(dispatch_get_main_queue(),^{hintVoiceNotice(allowed?@"麦克风已授权 · 点击语音开始":@"麦克风未授权 · 仍可点击露珠打字");});}];return;
+  hintVoiceNotice(@"需要麦克风授权，同意后就开始听");
+  [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL allowed){dispatch_async(dispatch_get_main_queue(),^{
+   if(!allowed){hintVoiceNotice(@"麦克风未授权 · 仍可点击露珠打字");return;}
+   if(hintExpanded)hintVoiceBegin();});}];return;   // allowed: listen now
  }
  if(mic!=AVAuthorizationStatusAuthorized){hintVoiceNotice(@"麦克风未授权 · 可在系统设置中开启，或直接打字");return;}
  hintRecognizer=[[SFSpeechRecognizer alloc] initWithLocale:[NSLocale localeWithLocaleIdentifier:@"zh-CN"]];

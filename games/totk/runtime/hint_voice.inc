@@ -1,4 +1,5 @@
-/* Pages and 朗读. An answer (at most six lines, prompts.py) shows three lines at a time ending in ▼: Return, a click on
+/* Pages and 朗读. An answer (at most six lines, prompts.py) shows three lines at a time ending in ▼ (more in a panel the
+   player made taller: hintPageLines, hint_panel_frame.inc): Return, a click on
    the text, or the voice reaching the next page moves on. 朗读 is off by default and remembered in assistant.json
    voice.enabled. It reads line by line, while the answer is still being written: the hint service makes each finished
    line's audio (tools/hint_assistant/totk_hint/voice.py: Google Chirp 3 HD, or the local Qwen3-TTS clone of a recorded
@@ -49,10 +50,10 @@ static NSArray<NSString *> *hintLinesOf(NSString *text){   // voice.py lines_of:
  }
  return lines;
 }
-static NSArray<NSString *> *hintPagesOf(NSString *text){
- NSArray<NSString *> *lines=hintLinesOf(text);NSMutableArray<NSString *> *pages=[NSMutableArray new];
- for(NSUInteger i=0;i<lines.count;i+=3)
-  [pages addObject:[[lines subarrayWithRange:NSMakeRange(i,MIN(3,lines.count-i))] componentsJoinedByString:@"\n"]];
+static NSArray<NSString *> *hintPagesOf(NSString *text){   // hintPageLines lines each (hint_panel_frame.inc)
+ NSArray<NSString *> *lines=hintLinesOf(text);NSMutableArray<NSString *> *pages=[NSMutableArray new];NSUInteger per=hintPageLines();
+ for(NSUInteger i=0;i<lines.count;i+=per)
+  [pages addObject:[[lines subarrayWithRange:NSMakeRange(i,MIN(per,lines.count-i))] componentsJoinedByString:@"\n"]];
  return pages.count?pages:@[text];
 }
 static NSString *hintPageText(NSString *answer){   // the page on screen of answer, ▼ when more follow
@@ -90,7 +91,7 @@ static BOOL hintLineFinished(NSArray<NSString *> *lines,NSInteger i){   // voice
 static void hintReadTick(void){   // start the next line once it can be read (hintVoicePoll asks again)
  if(!hintReadID||hintReadPlaying>=0)return;
  NSArray<NSString *> *lines=hintAnswerLines();
- if(hintReadLine<(NSInteger)hintPage*3)hintReadLine=hintPage*3;   // the player turned ahead
+ if(hintReadLine<(NSInteger)(hintPage*hintPageLines()))hintReadLine=hintPage*hintPageLines();   // the player turned ahead
  if(hintReadLine>=(NSInteger)lines.count){   // all read once the answer is complete
   if(!hintWorking&&hintDone&&lines.count){hintReadID=hintReadEngine=nil;hintReadSystem=NO;}
   return;
@@ -113,7 +114,7 @@ static void hintReadTick(void){   // start the next line once it can be read (hi
   else return;   // this line's audio is still being made
  }
  if(hintReadSystem&&!hintLineFinished(lines,hintReadLine))return;
- if(hintReadLine/3>(NSInteger)hintPage){hintPage=hintReadLine/3;hintShowPage();}   // the page follows the voice
+ if(hintReadLine/(NSInteger)hintPageLines()>(NSInteger)hintPage){hintPage=hintReadLine/hintPageLines();hintShowPage();}   // the page follows the voice
  if(file){
   hintPlayer=[[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:file] error:nil];
   hintPlayer.delegate=(id)hintActions;if(hintTestMode())hintPlayer.volume=0;   // a test session reads silently
@@ -127,7 +128,7 @@ static void hintReadTick(void){   // start the next line once it can be read (hi
 }
 static void hintReadBegin(NSString *jobID,BOOL sendLines){
  hintReadStop();
- hintReadID=jobID;hintReadLine=hintPage*3;
+ hintReadID=jobID;hintReadLine=hintPage*hintPageLines();
  hintReadSystem=!hintService.running;   // answers come from the service, so it runs; never start it just to read
  if(sendLines&&!hintReadSystem){
   NSArray<NSString *> *lines=hintAnswerLines();
@@ -148,7 +149,7 @@ static void hintShowSetup(NSString *title){
 static BOOL hintPageNext(void){
  if(!hintPagesRemain())return NO;
  hintPage++;hintShowPage();
- if(hintReadID){hintReadHalt();hintReadLine=hintPage*3;hintReadTick();}   // the voice moves with the player
+ if(hintReadID){hintReadHalt();hintReadLine=hintPage*hintPageLines();hintReadTick();}   // the voice moves with the player
  return YES;
 }
 static void hintReadFinished(void){
