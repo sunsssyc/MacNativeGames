@@ -37,13 +37,14 @@ It holds no game data, only identifiers; the build turns them into shaders from 
 """
 import json
 import re
+import struct
 import sys
 from pathlib import Path
 
 HEADER = ('# TOTK shader list v1 (games/totk/scripts/shader_list.py; docs/shader-list.md). The one list for every platform.\n'
-          '# Identifiers and pipeline descriptors only, no game data. Translation chain totk-native-v7-unverified.\n')
+          '# Identifiers and pipeline descriptors only, no game data. Translation chain totk-native-v8-unverified.\n')
 HEADERS = {'botw': ('# Breath of the Wild shader list v1 (games/totk/scripts/shader_list.py; docs/shader-list.md). The one list for every platform.\n'
-                    '# Identifiers and pipeline descriptors only, no game data. Translation chain totk-native-v7-unverified.\n')}
+                    '# Identifiers and pipeline descriptors only, no game data. Translation chain totk-native-v8-unverified.\n')}
 EXPORT = '# Generated from {} by scripts/shader_list.py; edit that list, not this file.\n'
 KEY = re.compile(r'^[0-9a-f]{64}$')
 VARIANT = re.compile(r'^[0-9a-f]{64}-[0-9a-f]{12}_b$')
@@ -80,6 +81,29 @@ def locator(fields):
     return (fields[1], fields[2], int(fields[3], 16), int(fields[4], 16), int(fields[5], 16))
 
 
+# nvn_pso_skey.h pso_skey as the runtime writes it (544 bytes): merged flag, colour formats, blend enables, write masks and
+# one 8-byte blend state per colour target
+SKEY_SIZE, SKEY_MERGED, SKEY_CFMT, SKEY_BLEND_EN, SKEY_CHMASK, SKEY_BLEND = 544, 162, 216, 260, 264, 272
+
+
+def pipeline_key(key):
+    """A render pipeline key as nvn_pso_skey.h pso_key_norm leaves it: blend factors of a target that does not blend, and
+    outside a merged pass the write mask and blend bit of a missing colour target, cleared. Rows recorded before the runtime
+    did so differ only there (9,057 render pipelines of the list were 5,611, 2026-10-22); keys of another size stay."""
+    if len(key) != 2 * SKEY_SIZE:
+        return key
+    b = bytearray.fromhex(key)
+    merged, cfmt = b[SKEY_MERGED], struct.unpack_from('<8I', b, SKEY_CFMT)
+    (blend_en,), (chmask,) = struct.unpack_from('<I', b, SKEY_BLEND_EN), struct.unpack_from('<I', b, SKEY_CHMASK)
+    for i in range(8):
+        if not merged and not cfmt[i]:
+            blend_en &= ~(1 << i); chmask &= ~(0xf << (4 * i))
+        if not blend_en >> i & 1:
+            b[SKEY_BLEND + 8 * i:SKEY_BLEND + 8 * i + 8] = bytes(8)
+    struct.pack_into('<I', b, SKEY_BLEND_EN, blend_en); struct.pack_into('<I', b, SKEY_CHMASK, chmask)
+    return b.hex()
+
+
 def warm_row(fields):
     """A warm row without flags ('S', variant, stage) / ('C', variant) / ('R', key) / ('B', key, vertex, fragment), or None
     when it is not one."""
@@ -89,10 +113,10 @@ def warm_row(fields):
     if kind == 'C' and len(fields) >= 2 and VARIANT.match(fields[1]):
         return tuple(fields[:2])
     if kind == 'R' and len(fields) >= 2 and PIPELINE.match(fields[1]):
-        return tuple(fields[:2])
+        return ('R', pipeline_key(fields[1]))
     if (kind == 'B' and len(fields) >= 4 and PIPELINE.match(fields[1]) and BORDER.match(fields[2]) and BORDER.match(fields[3])
             and fields[2:4] != ['-', '-']):
-        return tuple(fields[:4])
+        return ('B', pipeline_key(fields[1]), fields[2], fields[3])
     return None
 
 
@@ -140,7 +164,7 @@ class ShaderList:
                 raise ValueError(f'{path}:{number}: not a shader list row')
             row = warm_row(fields[:-1])
             if row and len(fields) == len(row) + 1 and fields[-1] in ('t', 'm', 'tm'):
-                lst.warm[row] = fields[-1]
+                lst.add_warm(row, fields[-1])   # rows that only differed in what pipeline_key clears become one
                 continue
             raise ValueError(f'{path}:{number}: not a shader list row')
         return lst

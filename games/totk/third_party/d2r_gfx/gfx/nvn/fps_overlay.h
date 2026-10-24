@@ -2,16 +2,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* TOTK: frames per second and the size of the game picture on screen (pixels) in its top-right corner, one line
-   ("FPS 97  2560x1440"; the top-left holds the hearts). The game's internal render resolution is
-   deliberately not shown (user, 2026-10-16). The game image itself (frame screenshots, texture dumps) never contains it. TOTK_FPS_OVERLAY=0 hides it. */
+/* TOTK: frames per second, the game's output resolution and, in brackets, its internal (3D scene) resolution in its
+   top-right corner, one line ("FPS 60  1920x1080 (1600x900)"; the top-left holds the hearts). The internal resolution was
+   left out at first (user, 2026-10-16) and asked for on 2026-10-23. The game image itself (frame screenshots, texture dumps) never contains it. TOTK_FPS_OVERLAY=0 hides it. */
 enum { FPS_OVERLAY_TEX_W = 768, FPS_OVERLAY_TEX_H = 64, FPS_OVERLAY_MAX_SCALE = 5 };
 
 /* fps / screen size < 0 / 0: not known yet ("--"). mfx: MetalFX upscaled the picture in the last frames. gen > 0: MetalFX
    frame interpolation shows that many generated frames a second besides the game's fps frames -> "FPS 50+50" (key 2).
    big: the game itself outputs more than 1920x1080 (true 2K) -> " 2K" at the end. cap > 0: the frame-rate cap paces the game
    (nvn_fps_cap_pacing) -> "FPS 60（上限 60）" / "FPS 60 (cap 60)". */
-typedef struct { int fps, screen_w, screen_h, mfx, gen, big, cap; } fps_overlay_info;
+typedef struct { int fps, screen_w, screen_h, mfx, gen, big, scene_w, scene_h, cap; } fps_overlay_info;   // screen: the output; scene: 0 = not known
 
 int fps_overlay_enabled(void);
 /* Shared user toggle for every in-picture HUD layer: FPS, shader collection and load telemetry. */

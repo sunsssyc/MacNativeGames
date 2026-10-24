@@ -15,6 +15,7 @@
 #include "runtime.h"
 #include "gamepad_layout.h"   // face buttons by position (PlayStation, Xbox) or label (Nintendo)
 #include "controller_map.h"   // the player's button layout (controls.txt)
+#include "switch_left_fallback.h"
 #include "mouse_look.h"       // mouse mode: movement as the right stick and the gyro
 
 static pthread_mutex_t gamepadLock = PTHREAD_MUTEX_INITIALIZER;
@@ -31,7 +32,20 @@ static int (*padUi)(int event);                 /* the window: runtime_gamepad_s
 static int uiOpen;                              /* a menu had the controller at the last refresh */
 static uint64_t uiHeld, uiKept;                 /* Switch buttons the menu saw held; physical buttons kept from the game */
 static char controlsText[16384];                /* the layout file as loaded or last written */
+static __weak GCController *rawLeftController;
+static SwitchLeftFallback rawLeft;
+static uint64_t gamepadRawLeftAt;
+static int32_t gamepadNativeLx, gamepadNativeLy;
 static void refresh_gamepads(void);
+
+/* Called on the main run loop by the already-open Switch HID motion stream. */
+void runtime_gamepad_switch_left(void *source, int x, int y) {
+    GCController *controller = (__bridge GCController *)source;
+    if (rawLeftController != controller) rawLeft = (SwitchLeftFallback){0};
+    rawLeftController = controller;
+    switch_left_feed(&rawLeft, x, y, runtime_now_ns());
+    refresh_gamepads();
+}
 
 /* The player's button layout (controller_map.h): TOTK_CONTROLS names the file (the launcher: <data>/controls.txt and
    checks it first). No file: the default layout. */
@@ -459,13 +473,25 @@ static void pad_ui_navigate(uint64_t mapped, const RuntimeGamepadState *s) {
 static void refresh_gamepads(void) {
     RuntimeGamepadState next = {0};
     uint64_t physical = (uint64_t)mouseButtons << CONTROLLER_MOUSE_FIRST;
+    int32_t nativeLx = 0, nativeLy = 0;
+    uint64_t rawAt = 0;
     for (GCController *controller in GCController.controllers) {
         GCExtendedGamepad *pad = controller.extendedGamepad;
         if (!pad) continue;
         next.connected = 1;
         physical |= gamepad_buttons(pad, face_by_position(controller));
-        next.lx = stronger_axis(next.lx, stick_axis(pad.leftThumbstick.xAxis.value));
-        next.ly = stronger_axis(next.ly, stick_axis(pad.leftThumbstick.yAxis.value));
+        float lx = pad.leftThumbstick.xAxis.value, ly = pad.leftThumbstick.yAxis.value;
+        nativeLx = stronger_axis(nativeLx, stick_axis(lx));
+        nativeLy = stronger_axis(nativeLy, stick_axis(ly));
+        int wasActive = rawLeft.active;
+        float rawX, rawY;
+        if (controller == rawLeftController && switch_left_get(&rawLeft, lx, ly, runtime_now_ns(), &rawX, &rawY)) {
+            lx = rawX; ly = rawY;
+            rawAt = rawLeft.at;
+            if (!wasActive) fprintf(stderr, "[totk-input] Switch left stick: native axes stuck at zero; using live HID input\n");
+        }
+        next.lx = stronger_axis(next.lx, stick_axis(lx));
+        next.ly = stronger_axis(next.ly, stick_axis(ly));
         next.rx = stronger_axis(next.rx, stick_axis(pad.rightThumbstick.xAxis.value));
         next.ry = stronger_axis(next.ry, stick_axis(pad.rightThumbstick.yAxis.value));
     }
@@ -519,6 +545,7 @@ static void refresh_gamepads(void) {
         pad_ui_navigate(mapped, &next);
         uiKept = physical;   /* still held when the menu closes (B closing it): kept from the game until released */
         next.buttons = 0; next.lx = next.ly = next.rx = next.ry = 0;
+        nativeLx = nativeLy = 0; rawAt = 0;   /* nor the left stick's fallback (runtime_gamepad_read) */
     } else {
         uiOpen = 0; uiKept &= physical;
         next.buttons |= mapped;
@@ -526,6 +553,8 @@ static void refresh_gamepads(void) {
     pthread_mutex_lock(&gamepadLock);
     pressedEdges |= next.buttons & ~gamepadState.buttons;
     gamepadState = next;
+    gamepadRawLeftAt = rawAt;
+    gamepadNativeLx = nativeLx; gamepadNativeLy = nativeLy;
     pthread_mutex_unlock(&gamepadLock);
 }
 
@@ -644,6 +673,8 @@ void runtime_gamepad_clear(void) {
     memset(toggleMoved, 0, sizeof toggleMoved);
     pthread_mutex_lock(&gamepadLock);
     gamepadState = (RuntimeGamepadState){0};
+    gamepadRawLeftAt = 0;
+    gamepadNativeLx = gamepadNativeLy = 0;
     pressedEdges = 0;
     mouse_look_reset(&mouseLook); mouseRX = mouseRY = 0;
     pthread_mutex_unlock(&gamepadLock);
@@ -663,6 +694,9 @@ void runtime_touch_pad_set(const RuntimeGamepadState *s) {
 void runtime_gamepad_read(RuntimeGamepadState *out) {
     pthread_mutex_lock(&gamepadLock);
     *out = gamepadState;
+    if (gamepadRawLeftAt && runtime_now_ns() - gamepadRawLeftAt > 250000000ULL) {
+        out->lx = gamepadNativeLx; out->ly = gamepadNativeLy;
+    }
     out->buttons |= touchState.buttons | pressedEdges;
     out->lx = stronger_axis(out->lx, touchState.lx); out->ly = stronger_axis(out->ly, touchState.ly);
     out->rx = stronger_axis(out->rx, touchState.rx); out->ry = stronger_axis(out->ry, touchState.ry);

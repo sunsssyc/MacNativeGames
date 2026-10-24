@@ -14,6 +14,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -351,8 +352,31 @@ static class ShaderService
         return bad;
     }
 
-    static void SpirvCross(string spv, string msl, string what)
+    // SPIRV-Cross's own program, compiled into this one (spirv_cross_inproc.cpp, linked by publish_native.sh): the same MSL
+    // without a process per shader. TOTK_XLATE_SPIRV_CROSS=process runs the --spirv-cross program instead, as before.
+    [DllImport("totk_spirv_cross", EntryPoint = "totk_spirv_cross_msl")]
+    static extern unsafe int SpirvCrossMsl(uint* words, nuint count, out IntPtr msl, out IntPtr err);
+    [DllImport("totk_spirv_cross", EntryPoint = "totk_spirv_cross_free")]
+    static extern void SpirvCrossFree(IntPtr p);
+    static readonly bool spirvCrossProcess = Environment.GetEnvironmentVariable("TOTK_XLATE_SPIRV_CROSS") == "process";
+
+    static unsafe void SpirvCross(string spv, string msl, string what)
     {
+        if (!spirvCrossProcess)
+        {
+            byte[] bytes = File.ReadAllBytes(spv);
+            int rc; IntPtr mslText, errText;
+            fixed (byte* b = bytes) rc = SpirvCrossMsl((uint*)b, (nuint)(bytes.Length / 4), out mslText, out errText);
+            try
+            {
+                if (rc != 0) throw new RuntimeError(what + Cut((Marshal.PtrToStringUTF8(errText) ?? "").Trim(), 300));
+                byte* text = (byte*)mslText; int n = 0;
+                while (text[n] != 0) n++;
+                File.WriteAllBytes(msl, new ReadOnlySpan<byte>(text, n).ToArray());   // the program's fprintf("%s"): the bytes as they are
+            }
+            finally { SpirvCrossFree(mslText); SpirvCrossFree(errText); }
+            return;
+        }
         var psi = new ProcessStartInfo(spirvCross) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (string a in Xc) psi.ArgumentList.Add(a);
         psi.ArgumentList.Add(spv); psi.ArgumentList.Add("--output"); psi.ArgumentList.Add(msl);
@@ -384,6 +408,7 @@ static class ShaderService
         };
         if (Truthy(Get(rq, "local"))) job["local"] = rq["local"].DeepClone();
         job["depth_minus_w"] = Truthy(Get(rq, "depth_minus_w"));   // nvnDeviceSetDepthMode(NEAR_IS_MINUS_W): clip z converted to Metal's 0..w
+        job["early_fragment_tests"] = Truthy(Get(rq, "early_fragment_tests"));   // fragment shaders: NVN control +0x718 (Program.cs QueryGraphicsState)
         Translate(job);
         JsonObject res = ReadRes(variant);
         string spv = Path.Combine(outDir, variant + ".spv"), msl = Path.Combine(outDir, variant + "_b.metal");

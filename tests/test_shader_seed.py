@@ -52,6 +52,20 @@ class ShaderInventory(unittest.TestCase):
         self.assertEqual(seed.control_key_len(bytes(0x20)+struct.pack('<I', 0x88c)+bytes(0x860)), 0x880)   # 0x88c: hashed as 0x880
         self.assertEqual(seed.control_key_len(bytes(0x20)+struct.pack('<I', 0x7d1)+bytes(0x860)), 0x7d1)
         self.assertEqual(seed.control_key_len(bytes(0x20)+struct.pack('<I', 0x848)+bytes(0x860)), 0x848)
+        def flagged(size, flag):   # a section with this size word and +0x718
+            c = bytearray(0x880); c[0x20:0x24] = struct.pack('<I', size); c[0x718] = flag; return bytes(c)
+        self.assertTrue(seed.early_fragment_tests('ps', flagged(0x880, 1)))
+        self.assertTrue(seed.early_fragment_tests('ps', flagged(0, 1)))               # no size word: the 0x880 layout too
+        self.assertFalse(seed.early_fragment_tests('ps', flagged(0x880, 0)))
+        self.assertFalse(seed.early_fragment_tests('vs', flagged(0x880, 1)))          # a fragment flag only
+        self.assertFalse(seed.early_fragment_tests('ps', flagged(0x848, 1)))          # Breath of the Wild's layout: not read
+        with tempfile.TemporaryDirectory() as tmp:   # the seed's requests carry it
+            def request(stage, flag):
+                c = bytearray(flagged(0x880, flag)); struct.pack_into('<II', c, 0x700, 0x30, 0x40)
+                return seed.translation_request('v', stage, bytes(c), bytes(0x40), {}, Path(tmp)/'v.code')
+            self.assertIs(request('ps', 1).get('early_fragment_tests'), True)
+            self.assertNotIn('early_fragment_tests', request('ps', 0))
+            self.assertNotIn('early_fragment_tests', request('vs', 1))
         agl = bytes(0x14)+b'\x40\0\0\0'+bytes(8)+struct.pack('<I', 0x848)+bytes(0x848-0x24)
         self.assertEqual(seed.bound_control(agl), agl)                    # Tears of the Kingdom: as in the archive
         self.assertEqual(seed.bound_control(agl, 'botw')[0x14:0x16], bytes(2))

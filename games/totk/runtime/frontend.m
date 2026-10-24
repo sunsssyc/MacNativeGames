@@ -32,6 +32,7 @@ static BOOL front_settings_key(NSEvent *event, BOOL down);
 static int textEntryOpen;
 static void front_mouse_update(void);
 int taa_enabled(void);   /* third_party/d2r_gfx/gfx/nvn/totk_taa.m: key 5 */
+int taa_effective(void);   /* a frame has been anti-aliased */
 static uint64_t bootStartNS;
 static _Atomic uint64_t presentedFrames;
 static _Atomic int warmPending;
@@ -243,8 +244,9 @@ static NSString *shortcut_text(void){
  int step=runtime_aspect_step();float ar=runtime_aspect_now();
  NSString *ratio=!ar?@"16:9":fabsf(ar*9-21)<0.05f?@"21:9":[NSString stringWithFormat:@"%.2f:1",ar];
  NSString *shape=step==1?[NSString stringWithFormat:@(TOTK_UI("适配窗口 %@","fit to window %@")),ratio]:step==2?ratio:@"16:9";
+ if(step<0)shape=@(TOTK_UI("本游戏暂不支持","not available in this game"));   /* runtime_aspect_step -1: this game version has no aspect sites */
  return [NSString stringWithFormat:@(TOTK_UI("快捷键说明\n1  提示：全部 → 只显示 FPS → 隐藏\n2  补帧：当前 %@（按键切换）\n3  画质：当前 %@（按键切换）\n4  画面比例：当前 %@（按键切换）\n5  边缘平滑（MetalFX 时间性）：%@\n6  手柄类型：当前 %@（按键切换）\n7  鼠标操作：当前 %@（按键切换）\n8  卡关助手（逐级提示）","Shortcuts\n1  Overlays: all → FPS only → off\n2  Interpolation: %@ (current; press to cycle)\n3  Picture: %@ (current; press to cycle)\n4  Aspect ratio: %@ (current; press to cycle)\n5  Edge smoothing (MetalFX Temporal): %@\n6  Controller type: %@ (current; press to cycle)\n7  Mouse: %@ (current; press to switch)\n8  Hint assistant (progressive hints)")),[NSString stringWithUTF8String:interp],picture,shape,
-  taa_enabled()?@(TOTK_UI("开","on")):@(TOTK_UI("关","off")),pad_type_text(),
+  taa_enabled()?(taa_effective()?@(TOTK_UI("开","on")):@(TOTK_UI("开（未生效）","on (not in effect)"))):@(TOTK_UI("关","off")),pad_type_text(),
   runtime_mouse_enabled()?@(TOTK_UI("开（视角、按键，⌘Tab 释放指针）","on (camera, buttons; Command-Tab frees the pointer)")):@(TOTK_UI("关","off"))];
 }
 -(instancetype)initWithFrame:(NSRect)frame{if((self=[super initWithFrame:frame])){int compact=hud_compact();self.wantsLayer=YES;self.layer.backgroundColor=[NSColor colorWithCalibratedWhite:0.04 alpha:compact?0.72:0.86].CGColor;self.layer.cornerRadius=compact?7:14;self.layer.borderWidth=1;self.layer.borderColor=[NSColor colorWithCalibratedWhite:1 alpha:compact?0.14:0.2].CGColor;
@@ -336,6 +338,29 @@ static void front_sync_drawable(void){
  CGFloat s=window.backingScaleFactor>0?window.backingScaleFactor:1,ts=drawable_scale();CGSize px=CGSizeMake(round(v.bounds.size.width*s*ts),round(v.bounds.size.height*s*ts));
  if(px.width<1||px.height<1||CGSizeEqualToSize(metalLayer.drawableSize,px))return;
  metalLayer.contentsScale=s;metalLayer.drawableSize=px;fprintf(stderr,"[totk] window drawable %.0fx%.0f (scale %.0f)\n",px.width,px.height,s);runtime_aspect_view(px.width,px.height);
+}
+/* BotW key 4: the window takes the selected camera ratio. Keep the chosen height across toggles, even when a wide
+   window has to shrink to fit the display; a manual resize establishes a new height. AppKit stays on the main queue. */
+void runtime_front_resize_aspect(double ratio){
+ if(!isfinite(ratio)||ratio<0.5||ratio>8)return;
+ dispatch_async(dispatch_get_main_queue(), ^{
+  if(!window||(window.styleMask&NSWindowStyleMaskFullScreen))return;
+  NSScreen *screen=window.screen?:NSScreen.mainScreen;if(!screen)return;
+  static NSSize lastSize;static CGFloat preferredHeight;
+  NSRect oldFrame=window.frame;NSSize current=window.contentView.bounds.size;
+  if(preferredHeight<=0||fabs(current.width-lastSize.width)>1||fabs(current.height-lastSize.height)>1)preferredHeight=current.height;
+  NSRect visible=screen.visibleFrame;
+  NSRect content=[window contentRectForFrameRect:visible];
+  CGFloat h=fmin(preferredHeight,fmin(content.size.height,content.size.width/ratio));
+  if(h<=0)return;
+  NSRect frame=[window frameRectForContentRect:NSMakeRect(0,0,round(h*ratio),round(h))];
+  frame.origin=NSMakePoint(NSMidX(oldFrame)-frame.size.width/2,NSMidY(oldFrame)-frame.size.height/2);
+  frame.origin.x=fmax(NSMinX(visible),fmin(frame.origin.x,NSMaxX(visible)-frame.size.width));
+  frame.origin.y=fmax(NSMinY(visible),fmin(frame.origin.y,NSMaxY(visible)-frame.size.height));
+  [window setFrame:frame display:YES];
+  lastSize=window.contentView.bounds.size;
+  front_sync_drawable();
+ });
 }
 @interface TOTKWindowDelegate:NSObject<NSWindowDelegate>
 @end

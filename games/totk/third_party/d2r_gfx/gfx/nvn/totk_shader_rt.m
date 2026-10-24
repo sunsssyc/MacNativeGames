@@ -6,6 +6,7 @@
 // runtime; 2026-10-17), else scripts/shader_service.py with the .NET translator. Same requests, replies and cache files.
 #import <Foundation/Foundation.h>
 #include "totk_ui_lang.h"
+#include "dm_wait_stats.h"
 #include <TargetConditionals.h>
 #include "totk_shader_rt.h"
 #include "dmsh_chain.h"
@@ -279,6 +280,18 @@ static int no_translator(void) {
 #endif
 }
 int totk_rt_can_translate(void) { return !no_translator(); }
+/* The submit thread's service, started in the background when the warm-up starts: with a seed holding every default
+   variant the first translation can come minutes into play, and it paid the service start there (BotW 1.6.0: 455 / 498 ms
+   in one frame, 72 ms for the same variant with the service running; 2026-10-23). Stalls in the first 20 s after the
+   start do not count (user 2026-10-23). */
+void totk_rt_service_prestart(void) {
+    if (no_translator()) return;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        pthread_mutex_lock(&g_rt_lock);   // g_svc is used under it (totk_rt_variant)
+        service_start(&g_svc);
+        pthread_mutex_unlock(&g_rt_lock);
+    });
+}
 
 /* The cached variant whose deps match the answers, or nil (g_rt_lock held). A variant whose Metal source is missing or
    could not be compiled before is dropped from the index, so it is translated again. */
@@ -323,6 +336,11 @@ static NSMutableDictionary *variant_request(NSString *shader, int stage, const u
     [rq addEntriesFromDictionary:answers];
     if (local) rq[@"local"] = local;
     rq[@"depth_minus_w"] = totk_depth_near_minus_w() ? @YES : @NO;   // nvnDeviceSetDepthMode: NEAR_IS_MINUS_W needs the GL -> Metal clip-z conversion in every vertex shader
+    /* A fragment shader's early fragment tests: control byte +0x718 of the 0x880-byte sections (the NVN driver reads it as
+       a fragment flag and the Switch tests depth before the shader). Breath of the Wild's shorter sections (the size word
+       at +0x20 between 0x7cc and 0x880, as for the key) are not read. Same rule as prepare_shader_seed.py. */
+    { uint32_t size; memcpy(&size, control + 0x20, 4);
+      if (stage == 1 && !(size >= 0x7cc && size < 0x880) && (control[0x718] & 1)) rq[@"early_fragment_tests"] = @YES; }
     if (no_translator()) rq[@"code_hex"] = hex(code + skip, c1t - skip);
     return rq;
 }
@@ -376,12 +394,14 @@ void totk_rt_contrib_line(NSString *line) {   // totk_contrib_add_line under the
    A miss no longer stops the game: the caller skips the draws / dispatches that need this variant (draw-skip reason
    "shader-missing"). The request is written once per variant; after fill_shaders.py pushed the translation, the next
    start compiles it in the background (totk_rt_warm_filled) and moves the request to shader-requests/done/. */
+static _Atomic uint64_t g_missed;   // distinct variants missed this run (the iPhone's shader box)
+uint64_t totk_rt_missed(void) { return atomic_load(&g_missed); }
 static void record_miss(NSString *shader, NSDictionary *rq, NSDictionary *answers) {   // g_rt_lock held
     NSString *variant = rq[@"variant"];
     [NSFileManager.defaultManager createDirectoryAtPath:@"shader-requests" withIntermediateDirectories:YES attributes:nil error:nil];
     static NSMutableSet<NSString *> *missed; if (!missed) missed = [NSMutableSet set];
     if ([missed containsObject:variant]) return;
-    [missed addObject:variant];
+    [missed addObject:variant]; atomic_fetch_add(&g_missed, 1);
     [[json_string(rq) dataUsingEncoding:NSUTF8StringEncoding] writeToFile:[NSString stringWithFormat:@"shader-requests/%@.json", variant] atomically:YES];
     if (contrib_wanted(shader, variant)) totk_contrib_add(shader, answers);   // not in the prepared seed, so not in the shared shader list yet
     LOG("[shader-miss] %s %s 不在手机的翻译缓存里：跳过用到它的绘制，请求已存 shader-requests/（第 %lu 个；在 Mac 上 ios/tools/fill_shaders.py 补上后下次启动预热）",
@@ -521,6 +541,13 @@ static void urgent_translate(NSString *shader, NSMutableArray *job) {
 }
 void totk_rt_urgent_stats(uint64_t *n, uint64_t *ns) { *n = atomic_load(&g_rt_urgent_n); *ns = atomic_load(&g_rt_urgent_ns); }
 
+/* What the submit thread spends on translation itself (may_defer 0): waiting for a job already running
+   elsewhere, and translating on the spot. Per-frame differences go to the frame TSV (hle_nvn.c @xl_wait_ms / @xl_sync_ms). */
+static _Atomic uint64_t g_rt_wait_n, g_rt_wait_ns, g_rt_sync_n, g_rt_sync_ns;
+void totk_rt_submit_stats(uint64_t *wait_n, uint64_t *wait_ns, uint64_t *sync_n, uint64_t *sync_ns) {
+    *wait_n = atomic_load(&g_rt_wait_n); *wait_ns = atomic_load(&g_rt_wait_ns); *sync_n = atomic_load(&g_rt_sync_n); *sync_ns = atomic_load(&g_rt_sync_ns);
+}
+
 NSString *totk_rt_variant(NSString *shader, int stage, const uint8_t *control, const uint8_t *code, NSDictionary *answers, NSArray *local, int may_defer) {
     uint64_t started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     pthread_mutex_lock(&g_rt_lock);
@@ -530,7 +557,9 @@ NSString *totk_rt_variant(NSString *shader, int stage, const uint8_t *control, c
     NSString *found = variant_lookup(shader, answers);
     for (NSMutableArray *job; !found && !may_defer && (job = g_rt_pending[shader]); found = variant_lookup(shader, answers)) {
         if ([job[0] intValue] == RT_JOB_QUEUED) { job[0] = @(RT_JOB_TAKEN); [g_rt_pending removeObjectForKey:shader]; break; }
+        uint64_t w0 = dm_wait_stats_enabled() ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
         pthread_cond_wait(&g_rt_done, &g_rt_lock);
+        if (w0) { atomic_fetch_add(&g_rt_wait_n, 1); atomic_fetch_add(&g_rt_wait_ns, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - w0); }
     }
     if (!found && may_defer == 2 && g_rt_pending[shader]) {   // urgent: a job of this shader still in line runs now
         NSMutableArray *job = g_rt_pending[shader];
@@ -544,7 +573,9 @@ NSString *totk_rt_variant(NSString *shader, int stage, const uint8_t *control, c
     BOOL existed = [NSFileManager.defaultManager fileExistsAtPath:[totk_rt_dir() stringByAppendingFormat:@"/%@_b.metal", rq[@"variant"]]];   // a re-translation of a broken variant is not a new one
     if (may_defer == 2) { urgent_translate(shader, rt_job_new(shader, stage, rq, existed, code_bytes)); pthread_mutex_unlock(&g_rt_lock); return nil; }
     if (may_defer) { bg_translate(shader, stage, rq, existed, code_bytes); pthread_mutex_unlock(&g_rt_lock); return nil; }
+    uint64_t s0 = dm_wait_stats_enabled() ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
     variant_record(shader, rq, translate(&g_svc, rq, started), existed, started, 0);
+    if (s0) { atomic_fetch_add(&g_rt_sync_n, 1); atomic_fetch_add(&g_rt_sync_ns, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - s0); }
     pthread_mutex_unlock(&g_rt_lock);
     return rq[@"variant"];
 }

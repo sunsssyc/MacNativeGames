@@ -1,7 +1,7 @@
 // The launcher inside the packaged app (build_app.py compiles it as Contents/MacOS/TOTK).
 // The game itself is Contents/Resources/totk/build/totk-native; everything it writes goes to the player's own folders:
 //   ~/Library/Application Support/MacNativeGames/TOTK/   profile (account, saves), shader cache, game slot, RomFS proof (BotW/ for Breath of the Wild)
-//   ~/Library/Logs/MacNativeGames/totk.log             this run (totk.previous.log: the one before; botw.log for Breath of the Wild)
+//   ~/Library/Logs/MacNativeGames/totk.log             this run, only with the debug log on (totk.previous.log: the one before; botw.log for Breath of the Wild)
 // If the game is already running, the launcher only brings it to the front.
 #import <AppKit/AppKit.h>
 #include <errno.h>
@@ -283,6 +283,8 @@ int main(int argc, char **argv) {
         }
         setenv("TOTK_SETTINGS", settingsFile.fileSystemRepresentation, 1);
         setenv("TOTK_CONTROLS", controls.fileSystemRepresentation, 1);
+        /* key 3's picture mode, kept between runs (runtime/game_patches_v143.c picture_mode_save / _restore) */
+        setenv("TOTK_PICTURE_MODE", env_or("TOTK_PICTURE_MODE", [data stringByAppendingPathComponent:@"picture-mode.txt"]).fileSystemRepresentation, 1);
         setenv("TOTK_PROFILE_DIR", profile.fileSystemRepresentation, 1);
         setenv("TOTK_SHADER_CACHE", cache.fileSystemRepresentation, 1);
         setenv("TOTK_GAME_SLOT_DIR", slot.fileSystemRepresentation, 1);
@@ -314,10 +316,17 @@ int main(int argc, char **argv) {
           FILE *cf = fopen(cmds.fileSystemRepresentation, "w"); if (cf) fclose(cf);
           setenv("TOTK_INPUT_FILE", cmds.fileSystemRepresentation, 1); }
 
+        /* The log is written only with debug on, as on the iPhone: defaults write org.macnativegames.totk TOTK_DEBUG_LOG
+           -bool YES (org.macnativegames.botw for Breath of the Wild), or TOTK_DEBUG_LOG=1 in the environment, which wins
+           (the test tools pass it). Off, the game's output goes to /dev/null and the logs of earlier runs are removed. */
+        const char *debugEnv = getenv("TOTK_DEBUG_LOG");
+        BOOL debugLog = debugEnv ? (*debugEnv && strcmp(debugEnv, "0")) : [NSUserDefaults.standardUserDefaults boolForKey:@"TOTK_DEBUG_LOG"];
         NSString *log = [logs stringByAppendingPathComponent:@GAME_LOG ".log"];
-        [NSFileManager.defaultManager removeItemAtPath:[logs stringByAppendingPathComponent:@GAME_LOG ".previous.log"] error:nil];
-        [NSFileManager.defaultManager moveItemAtPath:log toPath:[logs stringByAppendingPathComponent:@GAME_LOG ".previous.log"] error:nil];
-        FILE *lf = fopen(log.fileSystemRepresentation, "w");
+        NSString *previous = [logs stringByAppendingPathComponent:@GAME_LOG ".previous.log"];
+        [NSFileManager.defaultManager removeItemAtPath:previous error:nil];
+        if (debugLog) [NSFileManager.defaultManager moveItemAtPath:log toPath:previous error:nil];
+        else [NSFileManager.defaultManager removeItemAtPath:log error:nil];
+        FILE *lf = fopen(debugLog ? log.fileSystemRepresentation : "/dev/null", "w");
         if (lf) {
             dup2(fileno(lf), STDOUT_FILENO);
             dup2(fileno(lf), STDERR_FILENO);
@@ -326,8 +335,9 @@ int main(int argc, char **argv) {
         for (NSString *entry in settingsLog) fprintf(stderr, "[launcher] settings: %s\n", entry.UTF8String);
         char *const arguments[] = {(char *)binary.fileSystemRepresentation, "rewritten/" TOTK_GAME_DIR, "boot", NULL};
         execv(arguments[0], arguments);
-        fprintf(stderr, "[launcher] execv failed: %s\n", strerror(errno));
-        show_error([NSString stringWithFormat:@"Starting the game failed. See %@.", log]);
+        int failed = errno;
+        fprintf(stderr, "[launcher] execv failed: %s\n", strerror(failed));
+        show_error([NSString stringWithFormat:@"Starting the game failed: %s.", strerror(failed)]);
         return 1;
     }
 }

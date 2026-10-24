@@ -115,6 +115,7 @@ int runtime_aspect_step(void);     /* key 4's step: 0 16:9, 1 fit to the window,
 int runtime_aspect_set(int step);  /* the settings window: key 4's step directly; 0 where unavailable */
 void runtime_aspect_view(double w, double h);   /* frontend.m: the window's drawable size, which key 4 follows */
 float runtime_aspect_now(void);     /* the ratio in force, 0 = the game's own 16:9 */
+void runtime_front_resize_aspect(double ratio);   /* Mac: resize the window to a selected picture ratio */
 int hud_compact(void);   /* gfx/nvn/fps_overlay.c: the overlay lines go to the window's corner panel (TOTK_HUD=corners: in the picture) */
 int hud_snapshot(int line, char *out, size_t n, int *highlight);   /* line 0..3: FPS, shaders, render pipelines, load; 0 = not published */
 
@@ -131,6 +132,7 @@ int runtime_handheld_mode(void);   /* TOTK_OPERATION_MODE=handheld (runtime/serv
 void *runtime_input_override(const char *name);
 typedef struct { uint64_t buttons; int32_t lx,ly,rx,ry; int connected; } RuntimeGamepadState;
 void runtime_gamepad_start(void);
+void runtime_gamepad_switch_left(void *controller, int x, int y);
 void runtime_gamepad_read(RuntimeGamepadState *out);
 /* Forget held buttons and sticks: macOS stops delivering controller events (including releases) while the app is in
    the background, so a button held at focus loss would otherwise stay pressed for the game. */

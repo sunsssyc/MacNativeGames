@@ -113,7 +113,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     press(26); tick(); expect(panel, @"Mouse: on (camera, buttons; Command-Tab frees the pointer)");
     press(26); tick(); expect(panel, @"Mouse: off");
     press(26);   /* on for the Chinese check below */
-    expect(panel, @"Aspect ratio: 16:9");
+    expect(panel, @"Aspect ratio: not available in this game");   /* runtime_aspect_step -1 (2026-10-23: was shown as 16:9) */
     shortcut_test_aspect_init(1.6);   /* key 4 becomes available; a 16:10 window */
     press(21); tick(); expect(panel, @"Aspect ratio: fit to window 1.60:1");
     press(21); tick(); expect(panel, @"Aspect ratio: 21:9");

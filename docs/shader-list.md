@@ -64,7 +64,7 @@ misses one, that variant is not in the list yet, so the game writes it to `shade
 per shader and bind state, nothing else (`third_party/d2r_gfx/gfx/nvn/totk_shader_contrib.h`). Since every build carries
 each shader's default variant ([shader-variants.md](shader-variants.md); `all_default` in the seed's manifest), only
 states those variants do not serve are written, never a default variant (`totk_shader_rt.m contrib_wanted`): the list
-keeps non-default variants only (2026-10-22). Breath of the Wild's seed has no such flag yet, so it notes every new one.
+keeps non-default variants only (2026-10-22; Breath of the Wild too since 2026-10-23).
 Render pipelines are collected with them (2026-10-22): one the game builds in play that the app's warm-up lists lack
 becomes an `R` row (and a `B` row with its border recipe), written off the submit thread (`nvn_mtl.m pso_contribute`).
 Its shaders are named as a build names them: a default or depth-bound variant keeps its name, any other is named after
@@ -73,7 +73,7 @@ its deps as `prepare_shader_seed.py` names a list row (`totk_contrib_listed_name
 - Mac: `~/Library/Application Support/MacNativeGames/TOTK/shader-list-contribution.txt`
 - iPhone / iPad: Files app › On My iPhone (or iPad) › Tears of the Kingdom › `shader-list-contribution.txt`
 
-On a Mac, every 100 new rows of either kind (Breath of the Wild: 500) the launcher asks once, before the game starts, whether to send the file. An iPhone or
+On a Mac, every 100 new rows of either kind the launcher asks once, before the game starts, whether to send the file. An iPhone or
 iPad never asks during play: while it is connected to the Mac that built its app (cable or the same Wi-Fi),
 `games/totk/ios/tools/shader_contrib_watch.py` (a LaunchAgent the iOS build installs) fetches the device's rows every
 10 minutes at most and adds the ones not there yet to the same file the Mac writes:
@@ -127,7 +127,7 @@ Use `games/totk/scripts/shader_list.py`. It needs only Python 3.
 ```sh
 # Mac: add the shaders your own translation cache holds
 python3 games/totk/scripts/shader_list.py merge games/totk/assets/shader_list.tsv \
-  "$HOME/Library/Application Support/MacNativeGames/TOTK/shader-cache/rt-totk-native-v7-unverified"
+  "$HOME/Library/Application Support/MacNativeGames/TOTK/shader-cache/rt-totk-native-v8-unverified"
 
 # check the result, then commit the list and open a pull request
 python3 games/totk/scripts/shader_list.py stats games/totk/assets/shader_list.tsv
@@ -163,7 +163,7 @@ The tool drops rows that are not shader identifiers. Merging the same source twi
   - `L` 行：打包程序自己找不到的着色器在玩家游戏文件中的位置：文件路径、控制段和代码的偏移、代码长度。打包时从玩家自己的文件读出，核对哈希等于键才用。BNSH 文件、agl 的 `.sharcb` 包和游戏程序里的着色器，打包程序会自己找到。
   - `S`、`C`、`R` 行：预热用的着色器库和管线。`B` 行：同一条管线带着它当时采样器的边框颜色（Metal 没有的颜色要在着色器里模拟），预热按它建好补丁着色器和这条管线。标记 `t` 是标题画面用的（第一帧只等这些），`m` 是其余预热。
   - 只有标识，不含游戏数据。
-- **玩家怎么贡献**：玩的时候什么都不用做。Mac 现场翻译的变体、iPhone / iPad 缺的变体，都说明清单里还没有，游戏会把它记进 `shader-list-contribution.txt`（Mac 在 `~/Library/Application Support/MacNativeGames/TOTK/`，iPhone / iPad 在“文件”App › 我的 iPhone（或 iPad）› Tears of the Kingdom）。每次打包都带着每个着色器的默认变体，所以只记默认变体用不了的状态，默认变体从不记（清单只收非默认变体，2026-10-22）。玩的时候建的、App 预热清单里没有的渲染管线也一起记（`R` 行，带边框色的再加 `B` 行；变体名换成别人打包时也会有的名字）。着色器和管线合计每攒够 100 条（旷野之息 500 条），启动器会在游戏开始前问一次要不要发送；iPhone / iPad 玩的时候从不提醒，设备连着打包它的那台 Mac 时，由 Mac 上的 `ios/tools/shader_contrib_watch.py`（打包 iOS 版时装的后台任务）把文件拷过来，每台设备每多 100 条在 Mac 上问一次。“下次提醒”等到下一个 100 条再问，“不要提醒了”以后就不再问（文件照样记）；点“发送”会打开 GitHub 的[提交着色器清单](https://github.com/ly05010419/MacNativeGames/issues/new?template=shader-list.yml)页面，把文件拖进去即可。下次在 200、300 条时再提醒，每次发整个文件也没关系，清单里已有的会跳过。游戏不会自己上传任何东西。
+- **玩家怎么贡献**：玩的时候什么都不用做。Mac 现场翻译的变体、iPhone / iPad 缺的变体，都说明清单里还没有，游戏会把它记进 `shader-list-contribution.txt`（Mac 在 `~/Library/Application Support/MacNativeGames/TOTK/`，iPhone / iPad 在“文件”App › 我的 iPhone（或 iPad）› Tears of the Kingdom）。每次打包都带着每个着色器的默认变体，所以只记默认变体用不了的状态，默认变体从不记（清单只收非默认变体，2026-10-22）。玩的时候建的、App 预热清单里没有的渲染管线也一起记（`R` 行，带边框色的再加 `B` 行；变体名换成别人打包时也会有的名字）。着色器和管线合计每攒够 100 条，启动器会在游戏开始前问一次要不要发送；iPhone / iPad 玩的时候从不提醒，设备连着打包它的那台 Mac 时，由 Mac 上的 `ios/tools/shader_contrib_watch.py`（打包 iOS 版时装的后台任务）把文件拷过来，每台设备每多 100 条在 Mac 上问一次。“下次提醒”等到下一个 100 条再问，“不要提醒了”以后就不再问（文件照样记）；点“发送”会打开 GitHub 的[提交着色器清单](https://github.com/ly05010419/MacNativeGames/issues/new?template=shader-list.yml)页面，把文件拖进去即可。下次在 200、300 条时再提醒，每次发整个文件也没关系，清单里已有的会跳过。游戏不会自己上传任何东西。
 - **维护者合并**：`python3 games/totk/scripts/collect_shader_issues.py --seed <打包目录>/totk/build/shader-seed/v143` 先看每个 Issue 能加多少；`--apply --close` 写进清单、回复并关闭 Issue。附件里只取 `V` 行和管线的 `R` / `B` 行，种子自带的默认变体能用的 `V` 行丢掉。旧行用 `shader_list.py prune <清单> <种子目录>` 清掉。
 - **用 git 贡献**：
   - Mac：`python3 games/totk/scripts/shader_list.py merge games/totk/assets/shader_list.tsv <自己的翻译缓存目录>`，再运行 `locate_shaders.py` 补上定位行，用 `stats` 检查，提交清单并提 PR。
