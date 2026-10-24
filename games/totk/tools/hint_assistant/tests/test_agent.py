@@ -1,6 +1,7 @@
 """agent.py and memory.py offline: scripted providers, fake server-sent events, a fake harness, a temporary memory file."""
 import base64
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from totk_hint import agent, backends, config, harness, memory, service, vertex
+from totk_hint import agent, backends, config, harness, memory, service, skills, vertex, web
 
 
 def text(t):
@@ -297,41 +298,58 @@ class MemoryTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
-        self.m = memory.Memory(Path(self.folder.name) / 'assistant-memory.json')
+        self.m = memory.Memory(Path(self.folder.name) / 'assistant.db')
 
     def test_notes_answers_and_context(self):
         shrine = {'id': 'Dungeon045', 'name': '吉鲁塔古马奇神庙'}
-        self.m.record_answer('这个神庙怎么过', 1, '先往左边走。\n第二行', shrine, 'claude-code')
+        self.m.record_answer('这个神庙怎么过', 1, '先往左边走。\n第二行', shrine, 'claude-code', 'run1', 3)
         for i in range(4):
-            self.m.record_answer(f'问题{i}', 2, f'回答{i}')
+            self.m.record_answer(f'问题{i}', 2, f'回答{i}', None, 'agent', 'run1', 4)
         note = self.m.note('玩家只想要方向，不要完整解法')
         self.m.note('玩家只想要方向，不要完整解法')   # the same sentence once
         lines = self.m.context(shrine)
         self.assertTrue(lines[0].startswith('- 记下的：玩家只想要方向，不要完整解法（'))
         self.assertEqual(sum('记下的' in l for l in lines), 1)
-        self.assertTrue(any('在吉鲁塔古马奇神庙问“这个神庙怎么过”（1 档）→ 答“先往左边走。”' in l for l in lines))
+        self.assertTrue(any('在吉鲁塔古马奇神庙问“这个神庙怎么过”（1 档，claude-code）→ 答“先往左边走。”' in l for l in lines), lines)
         self.assertTrue(any('问题3' in l for l in lines))
         self.assertFalse(any('问题0' in l for l in lines))   # only the latest three besides the same place
+        self.assertFalse(any('问题' in l for l in self.m.context(None, skip=('run1', 4))))   # this conversation is in the prompt already
         self.assertEqual(len(self.m.recall('神庙')['answers']), 1)
         self.assertEqual(len(self.m.recall(about='Dungeon045')['answers']), 1)
-        self.assertTrue(self.m.forget(self.m.load()['notes'][0]['id']))
-        self.assertEqual(self.m.load()['notes'], [])
-        self.assertIsInstance(note, str)
+        full = self.m.history('神庙')['turns'][0]
+        self.assertEqual((full['answer'], full['channel'], full['session']), ('先往左边走。\n第二行', 'claude-code', 'run1/3'))
+        self.assertFalse(self.m.forget(note))   # the second note of the same sentence replaced it
+        self.assertTrue(self.m.forget(self.m.notes()[0]['id']))
+        self.assertEqual(self.m.notes(), [])
 
-    def test_bounded_and_survives_a_broken_file(self):
-        self.m.path.write_text('not json')
-        self.assertEqual(self.m.load()['answers'], [])
-        for i in range(memory.MAX_ANSWERS + 5):
-            self.m.record_answer('q', 1, 'a' * 200)
-        data = self.m.load()
-        self.assertEqual(len(data['answers']), memory.MAX_ANSWERS)
-        self.assertLessEqual(len(data['answers'][0]['answer']), memory.ANSWER_CHARS)
+    def test_bounded_shared_and_migrated(self):
+        with patch.object(memory, 'MAX_TURNS', 50):
+            for i in range(60):
+                self.m.record_answer('q', 1, f'a{i}')
+        self.assertEqual(len(self.m.turns(limit=100)), 50)
+        other = memory.Memory(self.m.path)   # the MCP server's process opens the same database
+        other.note('从另一个进程记的')
+        self.assertEqual(self.m.notes()[0]['text'], '从另一个进程记的')
         with self.assertRaises(ValueError):
             self.m.note('  ')
+        folder = Path(self.folder.name) / 'old'
+        folder.mkdir()
+        (folder / 'assistant-memory.json').write_text(json.dumps({'answers': [
+            {'time': 1, 'tier': 2, 'question': '旧问题', 'answer': '旧回答', 'about': {'id': 'Dungeon001', 'name': '乌奇神庙'}}],
+            'notes': [{'id': 'n1', 'time': 2, 'text': '旧笔记'}]}))
+        migrated = memory.Memory(folder / 'assistant.db')
+        self.assertEqual([t['answer'] for t in migrated.turns()], ['旧回答'])
+        self.assertEqual(migrated.turns()[0]['place_name'], '乌奇神庙')
+        self.assertEqual([n['text'] for n in migrated.notes()], ['旧笔记'])
+        self.assertTrue((folder / 'assistant-memory.json.migrated').exists())
+        self.assertFalse((folder / 'assistant-memory.json').exists())
 
     def test_memory_tool_in_the_harness(self):
         h = harness.Harness({}, memory=self.m.path)
         self.assertIn('memory', [s['name'] for s in h.tool_specs()])
+        self.m.record_answer('宝箱在哪', 2, '右侧高台。', None, 'agent')
+        turns = json.loads(h.call('history', {'query': '宝箱'})[0])['turns']
+        self.assertEqual((turns[0]['question'], turns[0]['answer']), ('宝箱在哪', '右侧高台。'))
         saved = json.loads(h.call('memory', {'action': 'note', 'text': '玩家已经拿到究极手', 'about': 'Dungeon045'})[0])
         self.assertTrue(saved['saved'])
         found = json.loads(h.call('memory', {'action': 'recall', 'text': '究极手'})[0])
@@ -340,9 +358,11 @@ class MemoryTests(unittest.TestCase):
             h.call('memory', {'action': 'drop'})
         off = harness.Harness({'memory': {'enabled': False}}, memory=self.m.path)
         self.assertNotIn('memory', [s['name'] for s in off.tool_specs()])
+        self.assertNotIn('history', [s['name'] for s in off.tool_specs()])
 
     def test_hint_carries_memory_and_remembers_where(self):
         self.m.note('玩家不想被剧透')
+        self.m.record_answer('这一轮之前的问题', 1, '这一轮的回答', None, 'agent', 'r', 7)
         backend = type('B', (), {'available': lambda self: (True, ''),
                                  'run': lambda self, system, prompt, ctx: (seen.update(prompt=prompt, path=ctx.memory_path)
                                                                            or {'text': '往左。'})})()
@@ -350,8 +370,10 @@ class MemoryTests(unittest.TestCase):
         cfg = copy.deepcopy(config.DEFAULTS)
         with patch.object(backends, 'make', return_value=backend), \
              patch.object(harness.Harness, 'whereabouts', return_value={'id': 'Dungeon045', 'name': '吉鲁塔古马奇神庙'}):
-            result = service.hint(cfg, question='怎么过', allow_screenshot=False, memory=self.m)
+            result = service.hint(cfg, question='怎么过', allow_screenshot=False, memory=self.m, conversation=('r', 7))
         self.assertIn('记忆（之前在这台 Mac 上的求助', seen['prompt'])
+        self.assertNotIn('这一轮的回答', seen['prompt'])   # the conversation itself comes as `previous`, not as memory
+        self.assertIn('- shrine-puzzle：', seen['prompt'])
         self.assertIn('玩家不想被剧透', seen['prompt'])
         self.assertEqual(seen['path'], self.m.path)
         self.assertEqual(result['about']['id'], 'Dungeon045')
@@ -482,12 +504,134 @@ class ChannelTests(unittest.TestCase):
             self.assertEqual(written['order'][0], 'codex')
             self.assertEqual(written['backends']['codex'], {'ok': False, 'why': 'no codex', 'label': 'Codex（本机）'})
 
+    def test_the_agent_gets_its_own_time_limit(self):
+        limits = {}
+
+        def make(name, cfg):
+            backend = type('B', (), {'available': lambda self: (True, ''),
+                                     'run': lambda self, system, prompt, ctx: (limits.__setitem__(name, ctx.timeout),
+                                                                               (_ for _ in ()).throw(backends.BackendError('x')))[1]})()
+            return backend
+        cfg = copy.deepcopy(config.DEFAULTS)
+        cfg['backends'] = ['claude-code', 'agent']
+        with patch.object(backends, 'make', side_effect=make), patch.object(service.Harness, 'whereabouts', return_value=None):
+            with self.assertRaises(backends.BackendError):
+                service.hint(cfg, question='q', allow_screenshot=False)
+        self.assertEqual(limits['claude-code'], 45)
+        self.assertEqual(limits['agent'], 90)
+        self.assertEqual(config.DEFAULTS['agent']['effort'], 'low')
+
     def test_config_checks_the_channel(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'assistant.json'
             path.write_text(json.dumps({'channel': 'gemini'}))
             with self.assertRaisesRegex(ValueError, 'channel'):
                 config.load(path)
+
+
+class SkillTests(unittest.TestCase):
+    def test_built_in_and_player_skills(self):
+        built_in = skills.catalog()
+        self.assertTrue({'shrine-puzzle', 'quest-next-step', 'find-things', 'point-on-screen', 'boss-and-gear'} <= set(built_in))
+        self.assertTrue(all(s['description'] and s['body'] for s in built_in.values()))
+        with tempfile.TemporaryDirectory() as folder:
+            mine = Path(folder)
+            (mine / 'shrine-puzzle').mkdir()
+            (mine / 'shrine-puzzle' / 'SKILL.md').write_text('---\nname: shrine-puzzle\ndescription: 我自己的神庙做法\n---\n只说方向。')
+            (mine / 'broken').mkdir()
+            (mine / 'broken' / 'SKILL.md').write_text('no front matter')
+            (mine / 'Bad Name').mkdir()
+            (mine / 'Bad Name' / 'SKILL.md').write_text('---\nname: Bad Name\ndescription: x\n---\nx')
+            found = skills.catalog(((skills.BUILT_IN, 'built-in'), (mine, 'player')))
+        self.assertEqual(found['shrine-puzzle'], {'description': '我自己的神庙做法', 'body': '只说方向。', 'source': 'player'})
+        self.assertNotIn('broken', found)
+        self.assertNotIn('Bad Name', found)
+        self.assertEqual(skills.prompt_lines({'a': {'description': 'd'}}), ['- a：d'])
+
+    def test_skill_tool(self):
+        h = harness.Harness({})
+        spec = next(s for s in h.tool_specs() if s['name'] == 'skill')
+        self.assertIn('shrine-puzzle', spec['inputSchema']['properties']['name']['enum'])
+        got = json.loads(h.call('skill', {'name': 'shrine-puzzle'})[0])
+        self.assertIn('guide', got['text'])
+        with self.assertRaisesRegex(harness.ToolError, '没有技能'):
+            h.call('skill', {'name': 'nope'})
+        self.assertNotIn('skill', [s['name'] for s in harness.Harness({'skills': {'enabled': False}}).tool_specs()])
+
+
+class WebTests(unittest.TestCase):
+    def test_only_public_hosts(self):
+        for url in ('http://127.0.0.1:8080/', 'http://localhost/', 'http://192.168.1.2/', 'http://[::1]/', 'file:///etc/passwd',
+                    'ftp://example.com/'):
+            with self.assertRaises(web.WebError, msg=url):
+                web.check_public(url)
+        with patch('socket.getaddrinfo', return_value=[(2, 1, 6, '', ('93.184.216.34', 443))]):
+            self.assertEqual(web.check_public('https://example.com/a'), 'https://example.com/a')
+        with patch('socket.getaddrinfo', return_value=[(2, 1, 6, '', ('10.0.0.5', 443))]):
+            with self.assertRaises(web.WebError):
+                web.check_public('https://intranet.example/')   # a public-looking name that resolves inside
+
+    def test_readable_page(self):
+        title, text = web.readable('<html><title>Jirutagumac &amp; co</title><nav>menu</nav><script>x=1</script>'
+                                   '<p>Grab the Wing.</p><p>Attach a Fan.</p><footer>links</footer></html>')
+        self.assertEqual(title, 'Jirutagumac & co')
+        self.assertIn('Grab the Wing.', text)
+        self.assertNotIn('menu', text)
+        self.assertNotIn('x=1', text)
+
+    def test_search_through_gemini(self):
+        reply = {'candidates': [{'content': {'parts': [{'text': '1. 用翼搭桥（gamersky）'}]}, 'groundingMetadata': {
+            'webSearchQueries': ['Jirutagumac Shrine chest'],
+            'groundingChunks': [{'web': {'title': 'gamersky.com', 'uri': 'https://r/1'}}, {'web': {'title': 'gamersky.com', 'uri': 'https://r/2'}},
+                                {'web': {'title': 'gamewith.net', 'uri': 'https://r/3'}}]}}]}
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+        cfg = {'vertex': {'project': 'p'}}
+        with patch('totk_hint.vertex.VertexREST.available', return_value=(True, '')), \
+             patch('totk_hint.vertex.VertexREST.token', return_value='t'), \
+             patch('urllib.request.urlopen', return_value=Response(json.dumps(reply).encode())) as urlopen:
+            got = web.search('吉鲁塔古马奇神庙 宝箱', cfg)
+        request = urlopen.call_args.args[0]
+        self.assertIn('/publishers/google/models/gemini-4-argon:generateContent', request.full_url)
+        self.assertEqual(json.loads(request.data)['tools'], [{'googleSearch': {}}])
+        self.assertEqual(got['sources'], [{'site': 'gamersky.com', 'url': 'https://r/1'}, {'site': 'gamewith.net', 'url': 'https://r/3'}])
+        self.assertEqual(got['searched'], ['Jirutagumac Shrine chest'])
+        with patch('totk_hint.vertex.VertexREST.available', return_value=(False, 'no Google sign-in')):
+            with self.assertRaisesRegex(web.WebError, 'Vertex AI'):
+                web.search('x', cfg)
+
+    def test_web_tools_only_for_the_built_in_agent(self):
+        self.assertFalse({'web_search', 'web_fetch'} & {s['name'] for s in harness.Harness({}).tool_specs()})
+        self.assertTrue({'web_search', 'web_fetch'} <= {s['name'] for s in harness.Harness({}, web=True).tool_specs()})
+        self.assertNotIn('web_search', {s['name'] for s in harness.Harness({'web': {'search': 'off'}}, web=True).tool_specs()})
+        with self.assertRaisesRegex(harness.ToolError, '自己的网页搜索'):
+            harness.Harness({}).call('web_search', {'query': 'x'})
+        with self.assertRaisesRegex(harness.ToolError, '本机或内网'):
+            harness.Harness({}, web=True).call('web_fetch', {'url': 'http://127.0.0.1/'})
+
+    def test_codex_searches_with_its_own_tool(self):
+        seen = {}
+
+        def run(command, ctx, prompt, env, cwd, on_line):
+            seen['command'] = command
+            on_line(json.dumps({'type': 'item.started', 'item': {'type': 'web_search'}}))
+            Path(ctx.workdir / 'answer.txt').write_text('好。')
+            return 0, '', ''
+        for settings, flag in (({}, True), ({'web': False}, False)):
+            backend = backends.Codex({'codex': settings})
+            ctx, events = context()
+            with tempfile.TemporaryDirectory() as folder, patch.object(backends, 'run_process', side_effect=run), \
+                 patch.object(backend, 'binary', return_value='/bin/codex'), patch.object(backend, 'features_off', return_value=[]):
+                ctx.workdir = Path(folder)
+                backend.run('s', 'p', ctx)
+            self.assertEqual(seen['command'][1] == '--search', flag)
+            self.assertEqual(seen['command'][2 if flag else 1], 'exec')
+            self.assertIn(('tool', 'WebSearch'), events)
 
 
 if __name__ == '__main__':

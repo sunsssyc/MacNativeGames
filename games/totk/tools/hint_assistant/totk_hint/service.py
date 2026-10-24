@@ -26,6 +26,7 @@ from pathlib import Path
 from . import backends as backendmod
 from . import config as configmod
 from . import memory as memorymod
+from . import skills as skillsmod
 from . import scene as scenemod
 from . import voice as voicemod
 from .harness import Harness
@@ -43,19 +44,21 @@ STAGES = {'game_state': '正在看存档', 'quest_log': '正在看任务日志',
           'screenshot': '正在看画面', 'runtime_state': '正在看林克的位置', 'wait_state': '正在看林克的位置',
           'press_button': '正在操作游戏', 'stop_action': '正在松开按键', 'mark_screen': '正在圈画面',
           'guide': '正在查攻略', 'WebSearch': '正在搜索攻略', 'WebFetch': '正在读攻略网页', 'memory': '正在翻记忆',
-          'plan': '正在规划', 'research': '正在查资料',
+          'plan': '正在规划', 'research': '正在查资料', 'history': '正在翻聊天记录', 'skill': '正在看技能',
+          'web_search': '正在搜索网页', 'web_fetch': '正在读网页',
           'Read': '正在看画面'}   # Read: Claude Code opening the attached picture
 
 
 def hint(config, tier=None, backend='auto', question=None, previous=None, allow_screenshot=None, romfs=None,
          save_root=None, cancel=None, progress=None, scene_image=None, allow_actions=False, on_event=None,
-         scene_size=None, memory=None):
+         scene_size=None, memory=None, conversation=None):
     """{"text", "tier", "backend", "model", "seconds", "attempts"}; raises BackendError when no backend answers.
     Each backend gets timeout_seconds, all of them together total_timeout_seconds. allow_actions offers the input tools
     (the caller checks assistant.json allow_actions and the player's consent for this request). on_event gets the
     backend's progress: ('tool', name) and ('text', the answer so far). scene_size (the picture's width, height) with
     scene_image offers mark_screen, and its marks come back in "marks". memory (a memory.Memory) adds what is
-    remembered to the prompt, and "about" in the result is the place the save is in, for remembering this answer."""
+    remembered to the prompt, and "about" in the result is the place the save is in, for remembering this answer;
+    conversation (run, session) is the one `previous` comes from, which the remembered turns leave out."""
     if cancel is not None and cancel.is_set():
         raise backendmod.Cancelled()
     tier = tier if tier in (1, 2, 3) else config['tier_default']
@@ -73,9 +76,12 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
     else:
         prompt += '\n本次当前画面：' + ('已附带游戏窗口截图。先看画面，再回答；存档只作为历史背景。' if scene_image else '不可用。不能假装看到了当前场景，不能把存档当作实时状态。')
     about = None
+    skills = Harness(config).skills
+    if skills:
+        prompt += ('\n技能（遇到对应的问题，先用 skill 读出全文再照做）：\n' + '\n'.join(skillsmod.prompt_lines(skills)))
     if memory:
         about = Harness(config, romfs, save_root, memory=memory).whereabouts()
-        remembered = memory.context(about)
+        remembered = memory.context(about, skip=conversation)
         if remembered:
             prompt += ('\n记忆（之前在这台 Mac 上的求助；记下的偏好要照做，和之前的回答保持一致，不要原样重复）：\n'
                        + '\n'.join(remembered))
@@ -94,8 +100,8 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
             continue
         if progress:
             progress(name)
-        ctx = backendmod.Context(config, shots, romfs, save_root, cancel, min(config['timeout_seconds'], remaining),
-                                 allow_actions, on_event)
+        limit = (config.get(name) or {}).get('timeout_seconds') or config['timeout_seconds']   # agent: its own limit
+        ctx = backendmod.Context(config, shots, romfs, save_root, cancel, min(limit, remaining), allow_actions, on_event)
         ctx.scene_image = scene_image
         ctx.scene_size = tuple(scene_size) if scene_image and scene_size else None
         ctx.memory_path = memory.path if memory else None
@@ -142,8 +148,9 @@ class Service:
         self.current = None  # (request id, cancel event, thread)
         self.lock = threading.Lock()
         self.voice = voicemod.VoiceService(self.folder, config, log)
-        self.memory = memorymod.Memory(self.folder / 'assistant-memory.json') \
+        self.memory = memorymod.Memory(self.folder / 'assistant.db') \
             if (config.get('memory') or {}).get('enabled', True) else None
+        self.run_id = time.strftime('%Y%m%d-%H%M%S')   # this game run: the panel's session numbers start again each run
         self.config_stamp = self._stamp()
 
     def _stamp(self):
@@ -263,7 +270,8 @@ class Service:
         try:
             result = hint(self.config, tier, request.get('backend') or 'auto', question or None, previous,
                           request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image,
-                          allow_actions=actions, on_event=event, scene_size=scene_size, memory=self.memory)
+                          allow_actions=actions, on_event=event, scene_size=scene_size, memory=self.memory,
+                          conversation=(self.run_id, session))
         except backendmod.Cancelled:
             finish()
             self.voice.stop(str(request['id']))
@@ -294,7 +302,8 @@ class Service:
                 del self.sessions[next(iter(self.sessions))]
         if self.memory:
             try:
-                self.memory.record_answer(question, tier, result['text'], result.get('about'), result['backend'])
+                self.memory.record_answer(question, tier, result['text'], result.get('about'), result['backend'], self.run_id,
+                                          session, result.get('model'), result.get('seconds'))
             except OSError as e:
                 self.log(f'[hint] could not remember the answer: {e}')
         self.log(f'[hint] request {request.get("id")} tier {tier} by {result["backend"]} in {result["seconds"]} s'

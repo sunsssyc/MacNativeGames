@@ -159,7 +159,7 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(len(results), 7)
         self.assertEqual(results[0]['error']['code'], -32700)
         self.assertEqual([t['name'] for t in results[2]['result']['tools']],
-                         ['wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text', 'guide', 'memory'])
+                         ['wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text', 'guide', 'memory', 'history', 'skill'])
         self.assertEqual([r['error']['code'] for r in results[3:6]], [-32602] * 3)
         self.assertEqual(results[-1]['result'], {})
         self.assertEqual(harness.Harness(allow_screenshot=True).tool_specs()[-1]['name'], 'screenshot')
@@ -234,6 +234,10 @@ class AssistantTests(unittest.TestCase):
         quest = {'name': 'test', 'steps': [{'name': 'Start', 'nolog': False}, {'name': 'Next', 'nolog': True}]}
         self.assertEqual(h._log_text(quest, 'Next'), '请前往监视堡垒。')
         self.assertIsNone(h._log_text(quest, 'NotReady'))
+
+    def test_links_become_their_words(self):
+        self.assertEqual(prompts.clean('来源：[任天堂更新说明](https://example.com/a_id/61936/)'), '来源：任天堂更新说明')
+        self.assertEqual(prompts.clean('见 https://example.com/x 页面'), '见 页面')
 
     def test_prompt_tiers_and_output_limits(self):
         for tier in (1, 2, 3):

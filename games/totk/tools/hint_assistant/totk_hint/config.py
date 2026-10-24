@@ -37,7 +37,11 @@ DEFAULTS = {
     'claude_code': {'path': None, 'model': 'opus', 'effort': 'low', 'web': True},
     # guide (guides.py): shrine and quest walkthroughs from Zelda Wiki, Samurai Gamers and IGN, for every backend
     'guides': {'enabled': True, 'timeout': 8},
-    'codex': {'path': None, 'model': None, 'effort': 'low'},
+    'codex': {'path': None, 'model': None, 'effort': 'low', 'web': True},   # web: Codex's own live search (--search)
+    # web: the built-in agent's web_search (Google Search through Gemini on Vertex AI: "gemini", or "off") and web_fetch
+    'web': {'search': 'gemini', 'search_model': 'gemini-4-argon', 'fetch': True},
+    # skills (skills.py): built-in playbooks plus the player's own in skills/<name>/SKILL.md next to the game's files
+    'skills': {'enabled': True},
     # Vertex AI: Claude Code with its Vertex provider (vertex-claude-code) and the direct REST client (vertex)
     # credentials: a service account key or authorized-user JSON file to sign in with instead of gcloud (its path only;
     # the file stays where it is and is never copied)
@@ -49,9 +53,9 @@ DEFAULTS = {
     # or gcloud signs in). The key comes from the environment variable api_key_env or the file api_key_file, never this file.
     # tool_protocol "text" for a model without function calling; vision false for one that takes no pictures.
     'agent': {'provider': 'anthropic', 'model': None, 'base_url': None, 'api_key_env': 'ANTHROPIC_API_KEY',
-              'api_key_file': None, 'effort': None, 'tool_protocol': 'native', 'vision': True, 'max_turns': 10,
-              'research': True},
-    # memory (memory.py): earlier answers and the model's notes about the player, in assistant-memory.json
+              'api_key_file': None, 'effort': 'low', 'tool_protocol': 'native', 'vision': True, 'max_turns': 10,
+              'research': True, 'timeout_seconds': 90},   # its loop runs several rounds and searches: a longer limit
+    # memory (memory.py): every question and answer and the model's notes about the player, in assistant.db (SQLite)
     'memory': {'enabled': True},
 }
 
@@ -90,7 +94,7 @@ def load(path=None):
         timeout = config[key]
         if isinstance(timeout, bool) or not isinstance(timeout, (float, int)) or not 1 <= timeout <= 600:
             raise ValueError(f'{path}: {key} must be between 1 and 600')
-    for key in ('claude_code', 'codex', 'vertex', 'voice', 'agent', 'memory', 'guides'):
+    for key in ('claude_code', 'codex', 'vertex', 'voice', 'agent', 'memory', 'guides', 'web', 'skills'):
         if not isinstance(config[key], dict):
             raise ValueError(f'{path}: {key} must be an object')
     voice = config['voice']
@@ -101,6 +105,8 @@ def load(path=None):
     chars = voice.get('google_monthly_chars')
     if isinstance(chars, bool) or not isinstance(chars, int) or chars < 0:
         raise ValueError(f'{path}: voice.google_monthly_chars must be a whole number of characters')
+    if config['web'].get('search') not in ('gemini', 'off'):
+        raise ValueError(f'{path}: web.search must be gemini or off')
     agent = config['agent']
     if agent.get('provider') not in ('anthropic', 'openai', 'vertex', 'gemini'):
         raise ValueError(f'{path}: agent.provider must be anthropic, openai, vertex or gemini')

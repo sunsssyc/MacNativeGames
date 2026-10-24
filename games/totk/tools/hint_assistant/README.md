@@ -20,13 +20,41 @@
 
 问神庙、机关或任务“怎么过”时，模型先调用 `guide`，不凭一帧画面猜解法（实测把顶上照下来的光认成了“发光碎块”）。`guide` 先认出是哪座神庙：`current` 先看实时状态（林克在神庙里就用存档记下的那座，在野外就取 600 米内最近的神庙入口），游戏没开时用存档；也可以传神庙/任务编号或中英文名字（“吉鲁塔古马奇”就能对上）。然后用游戏自己的英文名（Mals/USen，例如 Dungeon045 = Jirutagumac Shrine）同时去三个站取攻略：Zelda Wiki（MediaWiki API）、Samurai Gamers、IGN，每站 8 秒超时，取到的页面缓存 30 天（`~/Library/Caches/MacNativeGames/TOTK/hint-assistant/guides`）。Zelda Dungeon 和 Fandom 有 Cloudflare 拦截，不用。
 
-结果里还有 `names`：攻略里出现的道具、能力、左纳乌装置和地名在游戏里的中文原名（Wing → 翼、Cart → 平台车、Fan → 风扇机、Recall → 倒转乾坤），转述时用这些名字而不是自己翻译。`runtime_state` 里附近的物体也带上游戏原名 `name_zh`（SpObj_LiftGeneratorWing_A_01 → 翼）。提示词要求：两个以上来源一致才当事实，否则写成“建议”；按档位转述；最后注明参考的网站。「指给我看」只圈攻略里提到、画面里确实认得出的东西。Claude Code 另外开了 WebSearch / WebFetch，`guide` 查不到时可以自己搜（`claude_code.web: false` 关闭）；`guides.enabled: false` 关掉 `guide`。
+结果里还有 `names`：攻略里出现的道具、能力、左纳乌装置和地名在游戏里的中文原名（Wing → 翼、Cart → 平台车、Fan → 风扇机、Recall → 倒转乾坤），转述时用这些名字而不是自己翻译。`runtime_state` 里附近的物体也带上游戏原名 `name_zh`（SpObj_LiftGeneratorWing_A_01 → 翼）。提示词要求：两个以上来源一致才当事实，否则写成“建议”；按档位转述；最后注明参考的网站。「指给我看」只圈攻略里提到、画面里确实认得出的东西。`guide` 查不到时，各渠道用自己的网页搜索（见下文「各渠道共享的东西」）；`guides.enabled: false` 关掉 `guide`。
 
 命令行：`run.py guide 吉鲁塔古马奇神庙`、`run.py guide current`。实测（Claude Code，2 档）：12 秒、2 轮，答出“翼加平台车做飞机、风扇推进，宝箱靠搭桥加通天术”，注明三个来源。
 
-## 记忆
+## 各渠道共享的东西
 
-助手记在这台 Mac 上（`assistant-memory.json`，在数据目录里，不进仓库）：每次回答后服务自动记一条（时间、存档所在的神庙、档位、问题、回答第一行，最多 200 条）；模型也可以用 `memory` 工具记一句玩家说过的偏好或情况（“只要方向”“已经拿到究极手”，最多 60 条），或查以前的问答、删掉某条。每次求助的提示词带上全部记下的偏好、同一座神庙的最近 3 条问答和最近 3 条问答，要求照偏好回答、和之前的回答保持一致。血量、位置这类会变的状态不记。`memory.enabled: false` 关闭。命令行：`run.py memory [关键词]`；`run.py hint --memory <文件>` 用指定的记忆文件测试。
+所有渠道（Claude Code、Codex、Gemini 4、Vertex 上的 Claude）都由同一个服务调度：同一份提示词（规则、技能清单、记忆、这次求助的前几轮问答），同一套 harness 工具（Claude Code 和 Codex 经 MCP，内置智能体在服务进程里），同一个数据库。换渠道不丢记忆和对话。
+
+**记忆和历史对话**（`assistant.db`，SQLite，在数据目录里，不进仓库）：
+- 每次回答后服务把问答全文记下来，连同时间、这次游戏运行和面板会话、档位、回答的渠道和模型、存档所在的神庙，最多 5000 条；
+- 模型可以用 `memory` 记一句玩家说过的偏好或情况（“只要方向”“已经拿到究极手”，最多 60 条），也可以查和删；
+- `history` 工具查以前的对话全文，不管当时是哪个渠道答的；
+- 每次求助的提示词带上全部记下的偏好、同一座神庙的最近 3 条和最近 3 条问答（当前这次求助的问答已经在对话里，不重复）。
+
+血量、位置这类会变的状态不记。数据库用 WAL 模式，服务和智能体启动的 MCP 进程可以同时读写。旧版的 `assistant-memory.json` 第一次打开时导入一次，原文件改名为 `.migrated` 留着。`memory.enabled: false` 关闭。命令行：`run.py memory [关键词]`；`run.py hint --memory <文件>` 用指定的数据库测试。
+
+**技能**（`skills.py`，格式同 Claude 的 Agent Skills）：
+- 每个技能是一个文件夹里的 `SKILL.md`：开头写 `name` 和 `description`（什么问题用它），正文写做法；
+- 提示词只列名字和用途，模型遇到对应的问题先用 `skill` 工具读全文再照做；
+- 内置 5 个：`shrine-puzzle`（神庙解谜）、`quest-next-step`（任务下一步）、`find-things`（找地点和东西）、`point-on-screen`（指给我看）、`boss-and-gear`（头目和装备）；
+- 自己写的放在数据目录的 `skills/<名字>/SKILL.md`，同名的优先于内置的；
+- `skills.enabled: false` 关闭。
+
+**网页搜索**，每个渠道用各自最合适的：
+- Claude Code：自带的 WebSearch / WebFetch（`claude_code.web`）。
+- Codex：自带的实时搜索 `codex --search`（`codex.web`；`codex exec` 默认不开，以前一直没开）。
+- 内置智能体（Gemini 4 等）：
+  - `web_search`：经 Vertex AI 上的 Gemini 用 Google 搜索，返回要点和来源网站，约 10–15 秒，按“带搜索的请求”计费；
+  - `web_fetch`：读一个公开网页的正文，本机和内网地址（包括跳转过去的）一律拒绝；
+  - 配置在 `web`。
+- 网页内容只当资料，里面要求做的事不照做；答案里的链接在面板上只留文字。
+
+实测（10-24，2 档）：
+- Codex 问“1.4.3 更新改了什么”：自带搜索 3 次，25 秒，引用任天堂官方更新说明。
+- Gemini 4 问“雷之神殿的头目怎么打”：先读 `boss-and-gear` 技能，再看存档、核对名称、查攻略，最后网页搜索，认出吉波得女王，并从存档里已有的装备出主意。默认思考量 104 秒；`agent.effort: low`（现在的默认）49 秒。内置智能体单独有 90 秒时限（`agent.timeout_seconds`），其他渠道仍是 45 秒。
 
 ## 内置智能体（任何模型）
 

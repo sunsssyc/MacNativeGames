@@ -36,7 +36,7 @@ MAX_TURNS = 10
 MAX_TOKENS = 16000
 MAX_TOOL_CHARS = 12000   # a tool result is cut here: a small local model's context is a few thousand tokens
 ANTHROPIC_VERSION = '2023-06-01'
-RESEARCH_TOOLS = ('guide', 'search_text', 'quest_log', 'game_state', 'runtime_state')
+RESEARCH_TOOLS = ('guide', 'search_text', 'quest_log', 'game_state', 'runtime_state', 'history', 'web_search', 'web_fetch')
 THINK = re.compile(r'(?s)<think>.*?(?:</think>|$)')   # reasoning some local models write into the answer
 
 AGENT_RULES = """
@@ -47,7 +47,7 @@ AGENT_RULES = """
 - 工具出错时换一种查法或直接说明查不到，不要编造。"""
 
 RESEARCH_SYSTEM = """你是《塞尔达传说 王国之泪》卡关助手的资料员。用工具查明交给你的问题，只依据工具结果：
-- 解谜和任务做法用 guide 查攻略（神庙里或门口用 current），名称用 search_text 核对游戏里的简体中文原名。
+- 解谜和任务做法用 guide 查攻略（神庙里或门口用 current），guide 没有的用 web_search；名称用 search_text 核对游戏里的简体中文原名。
 - 返回简体中文要点，不超过 12 行：每条是一个事实或一步做法，末尾括号写来源网站名或“游戏文本”；几处来源不一致时写明。
 - 不要写给玩家的客套话，不要分档，主助手会决定说多少。查不到就写“查不到”。"""
 
@@ -305,6 +305,8 @@ class OpenAIProvider:
                 body['tool_choice'] = 'none'
         if self.settings.get('temperature') is not None:
             body['temperature'] = self.settings['temperature']
+        if self.settings.get('effort'):   # how long a reasoning model thinks: low / medium / high (Gemini, OpenAI)
+            body['reasoning_effort'] = self.settings['effort']
         text, calls, stop, usage, model = '', {}, None, {}, None
         for e in sse(self.url, body, self.headers(), timeout, check):
             if e.get('error'):
@@ -596,7 +598,7 @@ def run(provider, system, prompt, ctx, config, settings=None):
     """One hint through the agent loop: the backend's run()."""
     settings = settings or {}
     harness = Harness(config, ctx.romfs, ctx.save_root, ctx.allow_screenshot, ctx.allow_actions, ctx.marks, ctx.scene_size,
-                      memory=ctx.memory_path)
+                      memory=ctx.memory_path, web=True)   # no search of its own: web_search / web_fetch (web.py)
     content = [{'type': 'text', 'text': prompt}]
     if ctx.scene_image and getattr(provider, 'vision', True):
         mime, data = image_block(ctx.scene_image)

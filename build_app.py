@@ -1282,6 +1282,8 @@ def step_app(tree, out, logs, *, version="v0", game='totk'):
         clone(tree / 'runtime/assets/riju-mini-fullbody.png', res / 'runtime/assets/riju-mini-fullbody.png')
         for source in sorted((tree / 'tools/hint_assistant').rglob('*.py')):
             clone(source, res / source.relative_to(tree))
+        for source in sorted((tree / 'tools/hint_assistant/totk_hint/skills').glob('*/SKILL.md')):   # the built-in skills
+            clone(source, res / source.relative_to(tree))
     files += ['build/pso_manifest.tsv', 'build/pso_title.tsv']   # exported from the game's shared shader list (games/totk/Makefile)
     for index in expected.get('aoc', {}):   # Only installed, verified expansion pass volumes.
         if not (tree / f'extracted/{version}/aoc/{index}/index.json').is_file():

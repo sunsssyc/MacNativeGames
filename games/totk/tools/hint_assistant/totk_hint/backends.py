@@ -25,7 +25,7 @@ from pathlib import Path
 from . import tables as tablemod
 
 RUN_PY = Path(__file__).resolve().parents[1] / 'run.py'
-TOOLS = ('wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text', 'guide', 'memory')
+TOOLS = ('wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text', 'guide', 'memory', 'history', 'skill')
 NAMES = ('claude-code', 'codex', 'vertex-claude-code', 'vertex', 'agent')
 ACTION_TOOLS = ('press_button', 'stop_action')   # only for a request the player allowed to act (Context.allow_actions)
 CODEX_FEATURES_OFF = ('apps', 'browser_use', 'browser_use_external', 'computer_use', 'image_generation', 'in_app_browser',
@@ -352,7 +352,9 @@ class Codex:
 
         def toml(value):
             return json.dumps(value, ensure_ascii=False)   # JSON strings and string arrays are valid TOML
-        command = [binary, 'exec', '--ignore-user-config', '--skip-git-repo-check', '--ephemeral', '-s', 'read-only',
+        # --search: Codex's own live web search (the Responses web_search tool); codex exec leaves it off by default
+        command = [binary] + (['--search'] if self.settings.get('web', True) else []) + [
+                   'exec', '--ignore-user-config', '--skip-git-repo-check', '--ephemeral', '-s', 'read-only',
                    '--json', '--color', 'never', '-C', str(ctx.workdir), '-o', str(last),
                    '-c', f'mcp_servers.totk-harness.command={toml(python)}',
                    '-c', f'mcp_servers.totk-harness.args={toml(args)}',
@@ -375,6 +377,8 @@ class Codex:
             item = event.get('item') or {}
             if event.get('type') == 'item.started' and item.get('type') == 'mcp_tool_call':
                 ctx.event('tool', tool_name(item.get('tool')))
+            elif event.get('type') == 'item.started' and item.get('type') == 'web_search':
+                ctx.event('tool', 'WebSearch')
             elif event.get('type') == 'item.completed' and item.get('type') == 'agent_message' and item.get('text'):
                 ctx.event('text', item['text'])
         code, out, err = run_process(command, ctx, f'{system}\n\n{prompt}', tool_env(binary), str(ctx.workdir), line)
