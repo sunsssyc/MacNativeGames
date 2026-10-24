@@ -84,3 +84,34 @@ class DataBundle(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DataOutside(unittest.TestCase):
+    """build_app.place_data_outside (--game-data-outside): one image outside the apps, placed once and shared."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.tree, self.shared = self.root / 'tree', self.root / 'GameData'
+        self.image = self.tree / 'extracted/v143/romfs/romfs.bin'
+        self.image.parent.mkdir(parents=True)
+        self.image.write_bytes(b'romfs image')
+        (self.image.parent / 'index.json').write_text('{"romfs_sha256": "aa"}')
+
+    def place(self):
+        with patch.object(build_app, 'say') as say:
+            folder = build_app.place_data_outside(self.tree, self.shared, 'v143')
+        return folder, say.call_count
+
+    def test_placed_once_and_kept_until_the_image_changes(self):
+        folder, said = self.place()
+        image = folder / 'romfs.bin'
+        self.assertEqual((folder, said, image.read_bytes()), (self.shared.resolve() / 'v143', 1, b'romfs image'))
+        inode = image.stat().st_ino
+        folder, said = self.place()
+        self.assertEqual((said, image.stat().st_ino), (0, inode))   # the next build: the same file, nothing placed
+        (self.image.parent / 'index.json').write_text('{"romfs_sha256": "bb"}')
+        self.image.unlink(); self.image.write_bytes(b'romfs image 2')   # extracted again: another image
+        folder, said = self.place()
+        self.assertEqual((said, image.read_bytes()), (1, b'romfs image 2'))

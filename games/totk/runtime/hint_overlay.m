@@ -92,6 +92,7 @@ static NSDictionary *hintJSON(NSString *path) {
  id value=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
  return [value isKindOfClass:NSDictionary.class]?value:nil;
 }
+#include "hint_history.inc"
 static NSColor *hintInk(void){return [NSColor colorWithCalibratedRed:0.99 green:0.975 blue:0.85 alpha:1];}
 static NSColor *hintAccent(void){return [NSColor colorWithCalibratedRed:0.88 green:0.40 blue:0.015 alpha:1];}
 static NSColor *hintSurface(void){return [NSColor colorWithCalibratedRed:0.055 green:0.06 blue:0.045 alpha:1];}
@@ -242,7 +243,7 @@ static void hintLayout(CGFloat height){
  hintPointButton.frame=NSMakeRect(116,104,70,28);
  hintPointButton.hidden=hintWelcome||hintWorking||!hintSceneReady||!hintExpanded;
  hintPointButton.toolTip=@"把这个问题和暂停的画面一起发给露珠，她会在画面上圈出来（只对这个问题有效）";
- hintHistoryButton.hidden=hintWelcome||hintHistory.count==0;
+ hintHistoryButton.hidden=hintWelcome||hintHistoryCount()==0;
  hintHistoryButton.title=hintHistoryExpanded?@"最新回复":@"历史";
  hintHistoryButton.frame=NSMakeRect(w-124,104,48,28);
  hintActionsButton.frame=NSMakeRect(w-190,104,64,28);
@@ -304,7 +305,7 @@ static BOOL hintWrite(NSDictionary *value) {
 
 @implementation TOTKHintActions
 -(void)open:(id)sender{(void)sender;hintOpen();}
--(void)history:(id)sender{(void)sender;hintHistoryExpanded=!hintHistoryExpanded;hintText.stringValue=hintHistoryExpanded?[hintHistory componentsJoinedByString:@"\n\n"]:hintDone?hintPageText(hintLatest):hintLatest;hintLayout(0);[hintScroll.contentView scrollToPoint:NSZeroPoint];[hintScroll reflectScrolledClipView:hintScroll.contentView];}
+-(void)history:(id)sender{(void)sender;hintHistoryExpanded=!hintHistoryExpanded;hintText.stringValue=hintHistoryExpanded?hintHistoryText():hintDone?hintPageText(hintLatest):hintLatest;hintLayout(0);[hintScroll.contentView scrollToPoint:NSZeroPoint];[hintScroll reflectScrolledClipView:hintScroll.contentView];}
 -(void)voice:(id)sender{(void)sender;if(hintListening)hintVoiceEnd(NO);else hintVoiceBegin();}
 -(void)cancelVoice:(id)sender{(void)sender;hintVoiceEnd(YES);}
 // 指给我看: the typed question (or a plain "what now") with the frame on screen, for marks drawn on it (hint_scene.inc).

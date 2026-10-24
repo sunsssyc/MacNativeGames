@@ -93,7 +93,7 @@ static void hintVoiceControls(BOOL active){
  hintQuestion.enabled=!active;hintMic.enabled=!hintVoiceFinishing;
  hintMic.title=hintListening?@"停止":@"语音";
  hintSend.enabled=!active&&hintQuestion.stringValue.length>0;
- hintEnable.hidden=active||hintWorking;hintHistoryButton.hidden=active||!hintHistory.count;
+ hintEnable.hidden=active||hintWorking;hintHistoryButton.hidden=active||!hintHistoryCount();
  hintRead.hidden=active;hintVoiceCancel.hidden=!active;
  hintVoiceCancel.frame=NSMakeRect(20,104,92,28);
 }

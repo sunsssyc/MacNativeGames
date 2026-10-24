@@ -521,6 +521,19 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(limits['agent'], 90)
         self.assertEqual(config.DEFAULTS['agent']['effort'], 'low')
 
+    def test_history_file_for_the_panel(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'assistant.json'
+            path.write_text(json.dumps({'enabled': True, 'agent': {'provider': 'gemini', 'model': 'gemini-4-argon'}}))
+            svc = service.Service(config.load(path), folder, log=lambda line: None)
+            for i in range(service.HISTORY_TURNS + 2):
+                svc.memory.record_answer(f'问题{i}', 1, f'回答{i}', {'id': 'Dungeon045', 'name': '吉鲁塔古马奇神庙'}, 'agent', 'r1', 2)
+            svc.write_history()
+            turns = json.loads((Path(folder) / service.HISTORY).read_text())['turns']
+        self.assertEqual(len(turns), service.HISTORY_TURNS)
+        self.assertEqual((turns[0]['question'], turns[-1]['question']), ('问题2', f'问题{service.HISTORY_TURNS + 1}'))   # oldest first
+        self.assertEqual((turns[-1]['channel'], turns[-1]['place'], turns[-1]['session']), ('Gemini 4（Vertex AI）', '吉鲁塔古马奇神庙', 'r1/2'))
+
     def test_config_checks_the_channel(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'assistant.json'

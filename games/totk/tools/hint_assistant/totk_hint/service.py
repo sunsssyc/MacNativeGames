@@ -36,6 +36,8 @@ from .romfs import DATA_DIR
 REQUEST = 'hint-request.json'
 RESPONSE = 'hint-response.json'
 BACKENDS = 'hint-backends.json'   # which channels can answer, for the game's settings menu (辅助 › AI 渠道)
+HISTORY = 'hint-history.json'     # the latest conversations from assistant.db, for the panel's 历史 (runtime/hint_history.inc)
+HISTORY_TURNS = 30
 MAX_HISTORY_TURNS = 12
 MAX_SESSIONS = 8
 MAX_QUESTION_CHARS = 2000
@@ -174,6 +176,19 @@ class Service:
         self.log(f'[hint] settings reloaded (channel {config.get("channel")})')
         return True
 
+    def write_history(self):
+        """hint-history.json: the latest turns, oldest first, for the panel's 历史 after the game restarts too."""
+        if not self.memory:
+            return
+        try:
+            rows = self.memory.turns(limit=HISTORY_TURNS)
+            _write(self.folder / HISTORY, {'time': time.time(), 'turns': [
+                {'time': r['time'], 'session': f"{r['run'] or '-'}/{r['session'] or '-'}", 'question': r['question'],
+                 'answer': r['answer'], 'tier': r['tier'], 'place': r['place_name'],
+                 'channel': backendmod.label(r['backend'], self.config) if r['backend'] else None} for r in reversed(rows)]})
+        except Exception as e:   # the panel then shows this run's own list; answering is not affected
+            self.log(f'[hint] could not write {HISTORY}: {e}')
+
     def write_backends(self):
         """hint-backends.json: each channel's name as the menu shows it and whether it can answer here."""
         config = self.config
@@ -304,6 +319,7 @@ class Service:
             try:
                 self.memory.record_answer(question, tier, result['text'], result.get('about'), result['backend'], self.run_id,
                                           session, result.get('model'), result.get('seconds'))
+                self.write_history()
             except OSError as e:
                 self.log(f'[hint] could not remember the answer: {e}')
         self.log(f'[hint] request {request.get("id")} tier {tier} by {result["backend"]} in {result["seconds"]} s'
@@ -354,6 +370,7 @@ class Service:
                 voice_stamp = None
             self.log(f'[hint] service ready (requests: {path}; parent pid {parent_pid or "-"})')
             threading.Thread(target=self.write_backends, daemon=True).start()
+            self.write_history()   # also brings an old assistant-memory.json into assistant.db
             last_check = 0
             try:
                 while True:

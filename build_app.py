@@ -1184,6 +1184,34 @@ def place_data_bundle(bundle, app, res, version):
     link.symlink_to(os.path.relpath(app / 'Contents/Helpers' / bundle.name / 'Contents/Resources/romfs.bin', link.parent))
 
 
+def place_data_outside(tree, folder, version):
+    """Development builds (--game-data-outside): the RomFS image in folder/<version>/romfs.bin, outside the app and shared
+    by every app built this way, placed once (an APFS clone on the same volume) and again only when the image changed.
+    macOS checks a new app folder in seconds instead of minutes (2 GB instead of 18: 12 s instead of 164 s, 2026-10-24),
+    so a build into a new folder, or one another build replaced, does not hold up the player's screen. The launcher points
+    the game at it (Info.plist MNGGameData, app/launcher.m, runtime/romfs.c TOTK_ROMFS_DATA); the image keeps its inode
+    and times, so the runtime's RomFS verification record stays valid from one build to the next."""
+    image = tree / f'extracted/{version}/romfs/romfs.bin'
+    target = Path(folder).expanduser().resolve() / version / 'romfs.bin'
+    stamp = target.with_name('romfs.json')
+    st = image.stat()
+    try:
+        sha = json.loads((image.parent / 'index.json').read_text()).get('romfs_sha256')
+    except (OSError, ValueError):
+        sha = None
+    want = dict(size=st.st_size, sha256=sha) if sha else dict(size=st.st_size, mtime_ns=st.st_mtime_ns)
+    try:
+        if json.loads(stamp.read_text()) == want and target.stat().st_size == st.st_size:
+            return target.parent
+    except (OSError, ValueError):
+        pass
+    say(f'4/4 app: placing the game data outside the app, in {target.parent} (once; later builds share it)')
+    stamp.unlink(missing_ok=True)
+    clone(image, target)
+    stamp.write_text(json.dumps(want))
+    return target.parent
+
+
 def app_seal_valid(app):
     """The app's own seal, which records each helper bundle's signature (not --deep: that hashes the 16 GB image)."""
     return subprocess.run(['codesign', '--verify', '--strict', app], capture_output=True).returncode == 0
@@ -1267,7 +1295,7 @@ def install_app(new, out, *, verify=None, remove=None):
     return kept
 
 
-def step_app(tree, out, logs, *, version="v0", game='totk'):
+def step_app(tree, out, logs, *, version="v0", game='totk', data_outside=None):
     expected = VERSIONS[version]
     app_name, bundle_id, executable = APPS[game]
     tmp = out.with_name(out.name + '.partial')
@@ -1319,7 +1347,11 @@ def step_app(tree, out, logs, *, version="v0", game='totk'):
                 clone(lib, res/'build/shader-libs'/lib.name)
         place_variant_libs(tree, res, version)
     # after the checks above: signing it is slow
-    place_data_bundle(data_bundle(tree, version, logs, bundle_id=bundle_id), tmp, res, version)
+    outside = data_outside if game == 'totk' else None   # --game-data-outside
+    if outside:
+        outside = place_data_outside(tree, outside, version)
+    else:
+        place_data_bundle(data_bundle(tree, version, logs, bundle_id=bundle_id), tmp, res, version)
     clone(tree / 'build/app-launcher', tmp / f'Contents/MacOS/{executable}')
     info = dict(CFBundleDevelopmentRegion='en', CFBundleExecutable=executable, CFBundleIdentifier=bundle_id, CFBundleName=app_name,
                 CFBundleDisplayName=app_name, CFBundlePackageType='APPL', CFBundleShortVersionString=expected['display_version'],
@@ -1333,6 +1365,8 @@ def step_app(tree, out, logs, *, version="v0", game='totk'):
         clone(icon, tmp / 'Contents/Resources/AppIcon.icns')
         info['CFBundleIconFile'] = 'AppIcon'
     info['MNGContributionFolder'] = str(contrib_folder())   # app/launcher.m contrib_file: where players find it
+    if outside:
+        info['MNGGameData'] = str(outside)   # app/launcher.m: the game data of a development build (place_data_outside)
     import plistlib
     (tmp / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
     (tmp / 'Contents/PkgInfo').write_bytes(b'APPL????')
@@ -1740,6 +1774,10 @@ def parse_args(argv):
     ap.add_argument('-k', '--keys', type=Path, required=True, help='your prod.keys')
     ap.add_argument('-o', '--out', type=Path, help=f'the app or IPA to write (default depends on --platform; next to the game file)')
     ap.add_argument('--work', type=Path, help='work folder (default: TOTK_build next to the game file)')
+    ap.add_argument('--game-data-outside', type=Path, metavar='FOLDER',
+                    help='Tears of the Kingdom on the Mac, for development builds: keep the 16 GB game data in FOLDER, shared '
+                         'by every app built with it, instead of inside the app, so macOS checks a new app in seconds '
+                         'instead of minutes; the app then works only on this Mac with FOLDER in place')
     ap.add_argument('--mod', type=Path, metavar='FOLDER',
                     help='a mod folder prepared before the build: its exefs/ IPS / IPS32 / pchtxt patches for the main '
                          'module are merged into the code before it is rewritten (its romfs/ goes in with '
@@ -1932,7 +1970,7 @@ def main(argv):
             except BuildError as e:
                 say(f'   the Mac reminder for iPhone / iPad shader contributions was not installed: {e}')
     else:
-        step_app(tree, out, logs, version=version)
+        step_app(tree, out, logs, version=version, data_outside=args.game_data_outside)
     # Refresh an existing app's version, executable and signing identity before
     # the next Finder launch; the desktop alias keeps pointing to this bundle.
     if args.platform=='macos': run([LSREGISTER, '-f', out], logs / 'register-app.log')

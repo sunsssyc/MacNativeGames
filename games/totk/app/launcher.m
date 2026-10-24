@@ -196,13 +196,26 @@ int main(int argc, char **argv) {
         /* --check (build_app.py, once after packaging): only look that the game is there and exit. The first run of a new
            app is when macOS scans the whole bundle (minutes for 16 GB, with nothing on screen); doing it during the build
            makes the player's first start immediate. */
+        /* A development build keeps the game data outside the app (build_app.py --game-data-outside: Info.plist MNGGameData
+           names the folder of romfs.bin, shared by every app built that way), so macOS checks a new app folder in seconds
+           instead of minutes; the game reads the image there (runtime/romfs.c TOTK_ROMFS_DATA). */
+        id outside = [NSBundle.mainBundle objectForInfoDictionaryKey:@"MNGGameData"];
+        NSString *gameData = [outside isKindOfClass:NSString.class] && [outside length] ? outside : nil;
+        BOOL gameDataThere = !gameData || access([gameData stringByAppendingPathComponent:@"romfs.bin"].fileSystemRepresentation, R_OK) == 0;
         if (argc > 1 && !strcmp(argv[1], "--check")) {
             int ok = access(binary.fileSystemRepresentation, X_OK) == 0;
             NSString *declared = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
             ok = ok && [declared isEqualToString:@TOTK_GAME_VERSION];
             printf("%s: game version %s\n", ok ? "ok" : "missing binary or version mismatch", TOTK_GAME_VERSION);
-            return ok ? 0 : 1;
+            if (!gameDataThere) printf("missing game data: %s/romfs.bin\n", gameData.UTF8String);
+            return ok && gameDataThere ? 0 : 1;
         }
+        if (!gameDataThere) {
+            show_error([NSString stringWithFormat:@"This development build reads the game data from %@, which has no romfs.bin. "
+                                                   "Build it again with build_app.py --game-data-outside.", gameData]);
+            return 1;
+        }
+        if (gameData) setenv("TOTK_ROMFS_DATA", gameData.fileSystemRepresentation, 0);
         if (access(binary.fileSystemRepresentation, X_OK) != 0) {
             show_error(@"The game files are missing from this app. Build it again with build_app.py.");
             return 1;
