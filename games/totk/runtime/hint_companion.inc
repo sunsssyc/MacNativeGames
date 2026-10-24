@@ -6,6 +6,57 @@ static SFSpeechRecognitionTask *hintSpeechTask;
 static NSUInteger hintVoiceGeneration;
 static NSString *hintVoiceDraft;
 static NSString *hintTranscript;
+/* The microphone while listening, for the level bars and the log (2026-10-24: a spoken question came back empty with
+   nothing to tell whether any sound had arrived): the last buffer's and the loudest loudness in dBFS, written by the
+   audio tap; the partial results, the time listening began and the recognizer's error, on the main queue. */
+#include <stdatomic.h>
+static _Atomic float hintVoiceLevel=-120,hintVoicePeak=-120;
+static NSUInteger hintVoiceResults;
+static NSDate *hintVoiceStarted;
+static NSString *hintVoiceError;
+static NSView *hintVoiceMeter;
+static void hintVoiceMeasure(AVAudioPCMBuffer *buffer){   // the audio tap's thread
+ const float *samples=buffer.floatChannelData?buffer.floatChannelData[0]:NULL;AVAudioFrameCount n=buffer.frameLength;
+ if(!samples||!n)return;
+ double sum=0;for(AVAudioFrameCount i=0;i<n;i++)sum+=(double)samples[i]*samples[i];
+ float db=(float)(10*log10(sum/n+1e-12));atomic_store(&hintVoiceLevel,db);
+ if(db>atomic_load(&hintVoicePeak))atomic_store(&hintVoicePeak,db);
+}
+/* 正在听: seven bars left of the 正在听 line that follow the voice (flat when nothing comes in), taller in the middle and
+   rippling, so the player sees the microphone hear them. */
+@interface TOTKHintLevel:NSView
+@property(strong) NSTimer *timer;
+@end
+@implementation TOTKHintLevel{CGFloat bars[7];}
+-(void)drawRect:(NSRect)dirty{
+ (void)dirty;CGFloat gap=3,bw=(NSWidth(self.bounds)-gap*6)/7,h=NSHeight(self.bounds);
+ [hintAccent() setFill];
+ for(int i=0;i<7;i++){CGFloat bh=MAX(bw,bars[i]*h);[[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(i*(bw+gap),(h-bh)/2,bw,bh) xRadius:bw/2 yRadius:bw/2] fill];}
+}
+-(void)tick{
+ CGFloat loud=MAX(0,MIN(1,(atomic_load(&hintVoiceLevel)+55)/40));   // -55 dBFS: a quiet room; -15: a raised voice
+ double t=NSDate.timeIntervalSinceReferenceDate;
+ for(int i=0;i<7;i++){
+  CGFloat target=0.15+0.85*loud*(1-fabs(i-3.0)/4.5)*(0.6+0.4*sin(t*11+i*1.4));
+  bars[i]+=(target-bars[i])*(target>bars[i]?0.55:0.2);   // up fast, down slowly
+ }
+ self.needsDisplay=YES;
+}
+-(void)run:(BOOL)on{
+ if(on&&!self.timer){__weak TOTKHintLevel *weak=self;self.timer=[NSTimer timerWithTimeInterval:1/30.0 repeats:YES block:^(NSTimer *t){(void)t;[weak tick];}];
+  [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];}
+ if(!on){[self.timer invalidate];self.timer=nil;for(int i=0;i<7;i++)bars[i]=0;}
+}
+@end
+/* hintLayout and the voice controls: the bars while listening, the 正在听 line moved right of them. */
+static void hintVoiceMeterLayout(void){
+ if(!hintPanel)return;
+ if(!hintVoiceMeter){hintVoiceMeter=[TOTKHintLevel new];[hintPanel.contentView addSubview:hintVoiceMeter];}
+ BOOL on=hintListening;hintVoiceMeter.hidden=!on;[(TOTKHintLevel *)hintVoiceMeter run:on];
+ hintVoiceMeter.frame=NSMakeRect(20,26,52,18);
+ NSRect d=hintDisclosure.frame;CGFloat right=NSMaxX(d),left=on?82:20;
+ if(NSMinX(d)!=left){d.origin.x=left;d.size.width=MAX(40,right-left);hintDisclosure.frame=d;}
+}
 // Position is relative to the available travel area, so it survives window resizing.
 // Keep this UI preference separate from the assistant service's configuration.
 static BOOL hintDockPositionLoaded, hintDockPositionSet, hintDragging;
@@ -90,6 +141,7 @@ static void hintVoiceStopAudio(void){
  if(hintAudio){[hintAudio stop];[hintAudio.inputNode removeTapOnBus:0];hintAudio=nil;}
 }
 static void hintVoiceControls(BOOL active){
+ hintVoiceMeterLayout();
  hintQuestion.enabled=!active;hintMic.enabled=!hintVoiceFinishing;
  hintMic.title=hintListening?@"停止":@"语音";
  hintSend.enabled=!active&&hintQuestion.stringValue.length>0;
@@ -100,11 +152,14 @@ static void hintVoiceControls(BOOL active){
 static void hintVoiceSubmit(NSUInteger generation){
  if(generation!=hintVoiceGeneration||!hintVoiceFinishing)return;
  NSString *text=[hintTranscript stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+ float peak=atomic_load(&hintVoicePeak);
+ fprintf(stderr,"[hint-voice] stopped after %.1f s: loudest %.0f dBFS, %lu partial results, %lu characters%s%s\n",hintVoiceStarted?-hintVoiceStarted.timeIntervalSinceNow:0,
+         peak,(unsigned long)hintVoiceResults,(unsigned long)text.length,hintVoiceError?"; recognizer: ":"",hintVoiceError?hintVoiceError.UTF8String:"");
  hintVoiceStopAudio();hintVoiceFinishing=NO;hintListening=NO;hintVoiceGeneration++;
  [hintSpeechTask cancel];hintSpeechTask=nil;hintRecognition=nil;
  hintQuestion.stringValue=text.length?(hintVoiceDraft.length?[hintVoiceDraft stringByAppendingFormat:@" %@",text]:text):hintVoiceDraft?:@"";
  hintVoiceControls(NO);
- hintVoiceNotice(text.length?@"录音已停止 · 检查文字后点击发送":@"没有听清 · 可以重新录音或输入文字");
+ hintVoiceNotice(text.length?@"录音已停止 · 检查文字后点击发送":peak<-50?@"没有收到声音 · 请检查系统设置里的声音输入（麦克风）":@"听到了声音，但没认出文字 · 可以再说一次或输入文字");
  [hintPanel makeFirstResponder:hintQuestion];
 }
 static void hintVoiceEnd(BOOL cancel){
@@ -142,12 +197,26 @@ static void hintVoiceBegin(void){
  hintAudio=[AVAudioEngine new];AVAudioInputNode *input=hintAudio.inputNode;AVAudioFormat *format=[input outputFormatForBus:0];
  if(format.channelCount==0||format.sampleRate<=0){hintAudio=nil;hintVoiceNotice(@"未找到可用麦克风 · 请先输入文字");return;}
  SFSpeechAudioBufferRecognitionRequest *request=hintRecognition;
- [input installTapOnBus:0 bufferSize:1024 format:format block:^(AVAudioPCMBuffer *buffer,AVAudioTime *when){(void)when;[request appendAudioPCMBuffer:buffer];}];
+ /* The recognizer gets one channel: a MacBook Pro's microphone array comes in as three. */
+ AVAudioFormat *mono=format.channelCount>1&&format.commonFormat==AVAudioPCMFormatFloat32&&!format.interleaved?
+  [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32 sampleRate:format.sampleRate channels:1 interleaved:NO]:nil;
+ fprintf(stderr,"[hint-voice] listening: %s, %.0f Hz, %u channel(s)%s\n",([AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio].localizedName?:@"no default input").UTF8String,
+         format.sampleRate,(unsigned)format.channelCount,mono?", the first one to the recognizer":"");
+ atomic_store(&hintVoiceLevel,-120);atomic_store(&hintVoicePeak,-120);hintVoiceResults=0;hintVoiceError=nil;hintVoiceStarted=NSDate.date;
+ [input installTapOnBus:0 bufferSize:1024 format:format block:^(AVAudioPCMBuffer *buffer,AVAudioTime *when){(void)when;
+  AVAudioPCMBuffer *one=buffer;
+  if(mono&&buffer.floatChannelData&&(one=[[AVAudioPCMBuffer alloc] initWithPCMFormat:mono frameCapacity:buffer.frameLength])){
+   one.frameLength=buffer.frameLength;memcpy(one.floatChannelData[0],buffer.floatChannelData[0],buffer.frameLength*sizeof(float));}
+  else one=buffer;
+  hintVoiceMeasure(one);[request appendAudioPCMBuffer:one];}];
  NSError *error=nil;[hintAudio prepare];if(![hintAudio startAndReturnError:&error]){hintVoiceStopAudio();hintVoiceNotice(@"麦克风暂时无法使用 · 请先输入文字");return;}
  hintVoiceDraft=[hintQuestion.stringValue copy];hintListening=YES;hintTranscript=@"";hintVoiceGeneration++;NSUInteger generation=hintVoiceGeneration;hintVoiceControls(YES);[hintPanel makeFirstResponder:nil];
  hintVoiceNotice(@"正在听… 点击停止结束 · Esc 取消");
  hintSpeechTask=[hintRecognizer recognitionTaskWithRequest:request resultHandler:^(SFSpeechRecognitionResult *result,NSError *failure){dispatch_async(dispatch_get_main_queue(),^{
   if(generation!=hintVoiceGeneration)return;
+  if(result)hintVoiceResults++;
+  if(failure&&!hintVoiceError){hintVoiceError=[NSString stringWithFormat:@"%@ %ld: %@",failure.domain,(long)failure.code,failure.localizedDescription];
+   fprintf(stderr,"[hint-voice] recognizer: %s\n",hintVoiceError.UTF8String);}
   if(result){hintTranscript=result.bestTranscription.formattedString;if(hintListening){hintQuestion.stringValue=hintVoiceDraft.length?[hintVoiceDraft stringByAppendingFormat:@" %@",hintTranscript]:hintTranscript;}}
   if(result.isFinal){hintVoiceStopAudio();hintListening=NO;hintVoiceFinishing=YES;hintVoiceSubmit(generation);}
   else if(failure){hintVoiceStopAudio();if(hintVoiceFinishing)hintVoiceSubmit(generation);else{hintVoiceEnd(YES);hintVoiceNotice(@"语音识别中断 · 请重试或输入文字");}}

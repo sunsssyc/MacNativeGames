@@ -27,6 +27,10 @@ static uint64_t physicalPrev;
 static uint64_t tapUntil[CONTROLLER_BUTTONS];   /* ns, for tap */
 static int toggleOn[CONTROLLER_BUTTONS];        /* for toggle */
 static int toggleMoved[CONTROLLER_BUTTONS];     /* the stick moved since the toggle went on */
+static int (*padUi)(int event);                 /* the window: runtime_gamepad_set_ui */
+static int uiOpen;                              /* a menu had the controller at the last refresh */
+static uint64_t uiHeld, uiKept;                 /* Switch buttons the menu saw held; physical buttons kept from the game */
+static char controlsText[16384];                /* the layout file as loaded or last written */
 static void refresh_gamepads(void);
 
 /* The player's button layout (controller_map.h): TOTK_CONTROLS names the file (the launcher: <data>/controls.txt and
@@ -39,6 +43,7 @@ static void load_controller_map(void) {
     char text[16384]; size_t n = fread(text, 1, sizeof text - 1, f); int whole = feof(f); fclose(f);
     if (!whole) runtime_fail("controller layout file too large");
     text[n] = 0;
+    memcpy(controlsText, text, n + 1);
     const char *error = NULL; int line = controller_map_parse(text, controllerMap, controllerModes, &error);
     if (line) { fprintf(stderr, "[totk-input] %s line %d: %s\n", path, line, error); runtime_fail("controller layout file"); }
     uint16_t defaults[CONTROLLER_BUTTONS]; uint8_t defaultModes[CONTROLLER_BUTTONS]; controller_map_default(defaults, defaultModes);
@@ -109,6 +114,13 @@ static int face_by_position(GCController *controller) {
     return gamepad_type_face_by_position(atomic_load(&controllerType), controller.productCategory.UTF8String, controller.vendorName.UTF8String);
 }
 
+/* Xbox Share, Nintendo Capture; never a button that is already menu or view (a PlayStation controller's Create button is
+   buttonOptions, view, and must not also open the assistant), else nil. */
+static GCControllerButtonInput *share_button(GCExtendedGamepad *pad) {
+    GCControllerButtonInput *share = pad.buttons[GCInputButtonShare];
+    return share == pad.buttonOptions || share == pad.buttonMenu ? nil : share;
+}
+
 /* The physical buttons held, bit i = controller_physical_names[i]; the face buttons by where they sit
    (gamepad_face_positions), so one layout file means the same buttons on every controller. */
 static uint64_t gamepad_buttons(GCExtendedGamepad *pad, int by_position) {
@@ -127,7 +139,22 @@ static uint64_t gamepad_buttons(GCExtendedGamepad *pad, int by_position) {
     if (pad.dpad.down.isPressed) buttons |= 1ULL << 15;
     if ([pad isKindOfClass:GCDualSenseGamepad.class] && ((GCDualSenseGamepad *)pad).touchpadButton.isPressed) buttons |= 1ULL << 16;
     if ([pad isKindOfClass:GCDualShockGamepad.class] && ((GCDualShockGamepad *)pad).touchpadButton.isPressed) buttons |= 1ULL << 16;
+    if (pad.buttonHome.isPressed) buttons |= 1ULL << CONTROLLER_HOME;
+    if (share_button(pad).isPressed) buttons |= 1ULL << CONTROLLER_SHARE;
     return buttons;
+}
+
+/* Home and Share belong to macOS (Launchpad or the Games app, screenshots) unless the layout gives them something to do;
+   then the game asks for them, and macOS hands Home over when its controller setting lets the app in front have it. */
+static void claim_system_buttons(GCController *controller) {
+    GCExtendedGamepad *pad = controller.extendedGamepad;
+    if (!pad) return;
+    const int which[2] = {CONTROLLER_HOME, CONTROLLER_SHARE};
+    GCControllerButtonInput *buttons[2] = {pad.buttonHome, share_button(pad)};
+    for (int k = 0; k < 2; k++) {
+        int used = controllerMap[which[k]] || controller_mode_action(controllerModes[which[k]]);
+        buttons[k].preferredSystemGestureState = used ? GCSystemGestureStateDisabled : GCSystemGestureStateEnabled;
+    }
 }
 
 #if TARGET_OS_OSX
@@ -409,6 +436,26 @@ void runtime_mouse_release(void) {   /* main thread: the window let the pointer 
     if (mouseButtons) { mouseButtons = 0; refresh_gamepads(); }
 }
 
+/* The open menu's events, from the Switch buttons the player's layout gives: A accepts, B or + goes back, X talks to the
+   assistant, L / R change tabs, the D-pad and the left stick move. Presses only: a button held when the menu opened
+   does nothing in it. */
+static void pad_ui_navigate(uint64_t mapped, const RuntimeGamepadState *s) {
+    enum { HALF = 16384 };
+    uint64_t now = mapped;
+    if (s->lx < -HALF) now |= 1u << 12;
+    if (s->ly > HALF) now |= 1u << 13;
+    if (s->lx > HALF) now |= 1u << 14;
+    if (s->ly < -HALF) now |= 1u << 15;
+    uint64_t pressed = uiOpen ? now & ~uiHeld : 0;
+    uiHeld = now; uiOpen = 1;
+    static const struct { int bit, event; } events[] = {
+        {13, CONTROLLER_UI_UP}, {15, CONTROLLER_UI_DOWN}, {12, CONTROLLER_UI_LEFT}, {14, CONTROLLER_UI_RIGHT},
+        {0, CONTROLLER_UI_ACCEPT}, {1, CONTROLLER_UI_BACK}, {10, CONTROLLER_UI_BACK}, {2, CONTROLLER_UI_VOICE},
+        {6, CONTROLLER_UI_PREVIOUS_TAB}, {7, CONTROLLER_UI_NEXT_TAB}};
+    for (size_t k = 0; k < sizeof events / sizeof events[0]; k++)
+        if (pressed >> events[k].bit & 1 && padUi(CONTROLLER_UI_HELD)) padUi(events[k].event);
+}
+
 static void refresh_gamepads(void) {
     RuntimeGamepadState next = {0};
     uint64_t physical = (uint64_t)mouseButtons << CONTROLLER_MOUSE_FIRST;
@@ -460,9 +507,22 @@ static void refresh_gamepads(void) {
         int active = kind == CONTROLLER_TAP ? now < tapUntil[i] : kind == CONTROLLER_TOGGLE ? toggleOn[i] : 0;
         if (active) synthetic |= controllerMap[i];
     }
-    uint64_t held = physical & ~suppressed;
+    uint64_t held = physical & ~suppressed & ~uiKept;
     for (int i = 0; i < CONTROLLER_BUTTONS; i++) if (controllerModes[i] != CONTROLLER_HOLD) held &= ~(1ULL << i);
-    next.buttons |= controller_map_apply(controllerMap, held) | synthetic;
+    uint64_t mapped = controller_map_apply(controllerMap, held) | synthetic;
+    /* The buttons that open the settings menu or the assistant drive no Switch button (controller_map.h). */
+    for (int i = 0; i < CONTROLLER_BUTTONS; i++) {
+        int action = controller_mode_action(controllerModes[i]);
+        if (action && (edges >> i & 1) && padUi) padUi(action == CONTROLLER_ACTION_SETTINGS ? CONTROLLER_UI_SETTINGS : CONTROLLER_UI_ASSISTANT);
+    }
+    if (padUi && padUi(CONTROLLER_UI_HELD)) {
+        pad_ui_navigate(mapped, &next);
+        uiKept = physical;   /* still held when the menu closes (B closing it): kept from the game until released */
+        next.buttons = 0; next.lx = next.ly = next.rx = next.ry = 0;
+    } else {
+        uiOpen = 0; uiKept &= physical;
+        next.buttons |= mapped;
+    }
     pthread_mutex_lock(&gamepadLock);
     pressedEdges |= next.buttons & ~gamepadState.buttons;
     gamepadState = next;
@@ -476,11 +536,54 @@ static void attach_gamepad(GCController *controller) {
         (void)changed; (void)element;
         refresh_gamepads();
     };
+    claim_system_buttons(controller);
     fprintf(stderr, "[totk-input] native gamepad connected: %s (%s), face buttons by %s\n",
             (controller.vendorName ?: @"unknown").UTF8String,
             (controller.productCategory ?: @"unknown").UTF8String, face_by_position(controller) ? "position" : "label");
     runtime_feedback_attach(controller);
     refresh_gamepads();
+}
+
+void runtime_gamepad_set_ui(int (*ui)(int event)) { padUi = ui; }
+
+/* The settings menu's 操作 rows (main thread). The buttons that open the settings menu or the assistant, bit i = physical
+   button i. */
+uint64_t runtime_controller_action_buttons(int action) {
+    uint64_t bits = 0;
+    for (int i = 0; i < CONTROLLER_BUTTONS; i++) if (controller_mode_action(controllerModes[i]) == action) bits |= 1ULL << i;
+    return bits;
+}
+
+/* Gives action to physical alone (-1: to no button): the buttons that opened it before go back to doing nothing, and
+   physical stops doing what it did. In force at once and written to controls.txt (TOTK_CONTROLS) as the player's own
+   lines plus one line per button changed. 1: saved; 0: in force until the game closes. */
+int runtime_controller_bind(int action, int physical) {
+    if (action <= 0 || action >= CONTROLLER_ACTIONS || physical >= CONTROLLER_BUTTONS) return 0;
+    const char *path = getenv("TOTK_CONTROLS");
+    static char text[sizeof controlsText], out[sizeof controlsText];
+    memcpy(text, controlsText, sizeof text);
+    FILE *f = path && *path ? fopen(path, "rb") : NULL;   /* edited by hand meanwhile: start from what it says now */
+    if (f) { size_t n = fread(text, 1, sizeof text - 1, f); text[n] = 0; fclose(f); }
+    for (int i = 0; i < CONTROLLER_BUTTONS; i++) {
+        int set = i == physical ? 1 : controller_mode_action(controllerModes[i]) == action ? 0 : -1;
+        if (set < 0) continue;
+        if (!controller_map_set(text, i, set ? controller_action_names[action] : "none", out, sizeof out)) return 0;
+        memcpy(text, out, sizeof text);
+    }
+    uint16_t map[CONTROLLER_BUTTONS]; uint8_t modes[CONTROLLER_BUTTONS]; const char *error = NULL;
+    controller_map_default(map, modes);
+    if (controller_map_parse(text, map, modes, &error)) { fprintf(stderr, "[totk-input] controls: %s\n", error); return 0; }
+    memcpy(controllerMap, map, sizeof map); memcpy(controllerModes, modes, sizeof modes); memcpy(controlsText, text, sizeof text);
+    for (GCController *controller in GCController.controllers) claim_system_buttons(controller);
+    fprintf(stderr, "[totk-input] %s: %s\n", controller_action_names[action], physical < 0 ? "no controller button" : controller_physical_names[physical]);
+    if (!path || !*path) return 0;
+    char temp[4200]; snprintf(temp, sizeof temp, "%s.tmp", path);
+    FILE *w = fopen(temp, "w");
+    int ok = w && fputs(text, w) >= 0;
+    if (w && fclose(w)) ok = 0;
+    if (ok && rename(temp, path)) ok = 0;
+    if (!ok) { fprintf(stderr, "[totk-input] could not save the controls to %s; they hold until the game closes\n", path); unlink(temp); }
+    return ok;
 }
 
 /* Key 6 (runtime/input.c): the next type (auto -> Xbox -> PlayStation -> Switch); the held buttons are read again at once. */

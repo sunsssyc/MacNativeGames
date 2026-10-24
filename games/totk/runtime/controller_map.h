@@ -4,32 +4,50 @@
    other buttons i < 16 are FullKey bit i. The touchpad click (DualSense, DualShock 4) is physical button 16 and drives
    nothing by default. The mouse's buttons (Mac, mouse mode on key 7: runtime/gamepad.m) are physical buttons 17-21:
    left attacks (Y), right draws the bow (ZR, "aim mouse_left": a left click while it is held shoots instead of
-   attacking), middle targets (ZL), the two side buttons drive nothing.
+   attacking), middle targets (ZL), the two side buttons drive nothing. The Home button (PS, Xbox, Home: physical 22)
+   and the Share button (Xbox Share, Nintendo Capture: 23) are the controller's own, past the mouse.
+   Besides a Switch button, a button can open the game's settings menu ("settings") or the hint assistant 露珠
+   ("assistant"; runtime/gamepad.m hands those presses to the window, runtime/frontend.m). By default Home opens the
+   settings menu, as on a Switch, and the touchpad and Share open the assistant; they never reach the game.
    A layout file has one "physical = switch [mode]" line per change; '#' starts a comment; names are case-insensitive;
    "none" leaves a button unused; lines not given keep the default. The optional mode says how long the Switch button is
    held: "hold" (default) while the physical button is down, "tap" for 400 ms after each press (tap again to keep
    running), "toggle" on and off at each press (cleared when the stick returns to center), "aim <fire button>" while
    the button is down, except while the fire button is also down (hold L2 to draw the bow, press R2 to shoot it; the
    fire button's own line applies only while the aim button is up). A mode byte keeps the kind in its low 3 bits and,
-   for aim, the fire button's index in its high 5 bits.
+   for aim, the fire button's index in its high 5 bits; for a button that opens a menu (CONTROLLER_ACTION, Switch
+   button none), which one.
    Pure C: app/launcher.m checks the file before the game starts (an alert names the bad line), runtime/gamepad.m
    applies it, tests/test_controller_map.c covers the parser. */
 #ifndef TOTK_CONTROLLER_MAP_H
 #define TOTK_CONTROLLER_MAP_H
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
-enum { CONTROLLER_BUTTONS = 22, CONTROLLER_SWITCH_BUTTONS = 16, CONTROLLER_MOUSE_FIRST = 17, CONTROLLER_MOUSE_BUTTONS = 5 };
+enum { CONTROLLER_BUTTONS = 24, CONTROLLER_SWITCH_BUTTONS = 16, CONTROLLER_MOUSE_FIRST = 17, CONTROLLER_MOUSE_BUTTONS = 5,
+       CONTROLLER_TOUCHPAD = 16, CONTROLLER_HOME = 22, CONTROLLER_SHARE = 23 };
 static const char *const controller_physical_names[CONTROLLER_BUTTONS] = {
     "south", "east", "west", "north", "l3", "r3", "l1", "r1", "l2", "r2", "menu", "view", "left", "up", "right", "down",
-    "touchpad", "mouse_left", "mouse_right", "mouse_middle", "mouse4", "mouse5"};
+    "touchpad", "mouse_left", "mouse_right", "mouse_middle", "mouse4", "mouse5", "home", "share"};
 static const char *const controller_switch_names[CONTROLLER_SWITCH_BUTTONS] = {
     "a", "b", "x", "y", "lstick", "rstick", "l", "r", "zl", "zr", "plus", "minus", "left", "up", "right", "down"};
 
-enum { CONTROLLER_HOLD = 0, CONTROLLER_TAP = 1, CONTROLLER_TOGGLE = 2, CONTROLLER_AIM = 3 };
+enum { CONTROLLER_HOLD = 0, CONTROLLER_TAP = 1, CONTROLLER_TOGGLE = 2, CONTROLLER_AIM = 3, CONTROLLER_ACTION = 4 };
 static inline int controller_mode_kind(uint8_t mode) { return mode & 7; }
 static inline int controller_mode_fire(uint8_t mode) { return mode >> 3; }
+/* What a button opens instead of driving a Switch button: 0 nothing. */
+enum { CONTROLLER_ACTION_SETTINGS = 1, CONTROLLER_ACTION_ASSISTANT = 2, CONTROLLER_ACTIONS = 3 };
+static const char *const controller_action_names[CONTROLLER_ACTIONS] = {"none", "settings", "assistant"};
+static inline int controller_mode_action(uint8_t mode) { return controller_mode_kind(mode) == CONTROLLER_ACTION ? mode >> 3 : 0; }
+static inline uint8_t controller_action_mode(int action) { return (uint8_t)(CONTROLLER_ACTION | action << 3); }
+/* The controller in the window's menus (runtime/gamepad.m to runtime/frontend.m and hint_overlay.m, main thread): asked
+   CONTROLLER_UI_HELD, the window says whether the settings menu or the hint panel is open; while one is, the controller's
+   Switch buttons and left stick move through it instead of reaching the game, one event per press. */
+enum { CONTROLLER_UI_HELD, CONTROLLER_UI_SETTINGS, CONTROLLER_UI_ASSISTANT, CONTROLLER_UI_UP, CONTROLLER_UI_DOWN,
+       CONTROLLER_UI_LEFT, CONTROLLER_UI_RIGHT, CONTROLLER_UI_ACCEPT, CONTROLLER_UI_BACK, CONTROLLER_UI_NEXT_TAB,
+       CONTROLLER_UI_PREVIOUS_TAB, CONTROLLER_UI_VOICE };
 
 static inline void controller_map_default(uint16_t map[CONTROLLER_BUTTONS], uint8_t modes[CONTROLLER_BUTTONS]) {
     for (int i = 0; i < CONTROLLER_BUTTONS; i++) { map[i] = i < CONTROLLER_SWITCH_BUTTONS ? (uint16_t)(1u << i) : 0; modes[i] = CONTROLLER_HOLD; }
@@ -38,6 +56,8 @@ static inline void controller_map_default(uint16_t map[CONTROLLER_BUTTONS], uint
     map[LEFT] = 1u << 3;                                                    /* attack (Y) */
     map[RIGHT] = 1u << 9; modes[RIGHT] = (uint8_t)(CONTROLLER_AIM | LEFT << 3);   /* draw the bow (ZR); a left click shoots */
     map[MIDDLE] = 1u << 8;                                                  /* target (ZL) */
+    modes[CONTROLLER_HOME] = controller_action_mode(CONTROLLER_ACTION_SETTINGS);
+    modes[CONTROLLER_TOUCHPAD] = modes[CONTROLLER_SHARE] = controller_action_mode(CONTROLLER_ACTION_ASSISTANT);
 }
 
 /* Index of name [s, s + n) in the count names, or -1. */
@@ -71,10 +91,11 @@ static inline int controller_map_parse(const char *text, uint16_t map[CONTROLLER
             for (const char *q = value_end; q < stop; q++) if (*q != ' ' && *q != '\t') { mode = q; break; }
             if (mode) { mode_end = mode; while (mode_end < stop && *mode_end != ' ' && *mode_end != '\t') mode_end++; }
             int physical = controller_name_index(controller_physical_names, CONTROLLER_BUTTONS, p, (size_t)(key_end - p));
-            if (physical < 0) { *error = "unknown controller button (south east west north l1 r1 l2 r2 l3 r3 menu view up down left right touchpad mouse_left mouse_right mouse_middle mouse4 mouse5)"; return line; }
+            if (physical < 0) { *error = "unknown controller button (south east west north l1 r1 l2 r2 l3 r3 menu view up down left right touchpad home share mouse_left mouse_right mouse_middle mouse4 mouse5)"; return line; }
             size_t n = (size_t)(value_end - value);
-            int target = n == 4 && !strncasecmp(value, "none", 4) ? CONTROLLER_SWITCH_BUTTONS : controller_name_index(controller_switch_names, CONTROLLER_SWITCH_BUTTONS, value, n);
-            if (target < 0) { *error = "unknown Switch button (a b x y l r zl zr plus minus lstick rstick up down left right none)"; return line; }
+            int action = controller_name_index(controller_action_names, CONTROLLER_ACTIONS, value, n);   /* 0: none */
+            int target = action == 0 ? CONTROLLER_SWITCH_BUTTONS : controller_name_index(controller_switch_names, CONTROLLER_SWITCH_BUTTONS, value, n);
+            if (target < 0 && action < 0) { *error = "unknown Switch button (a b x y l r zl zr plus minus lstick rstick up down left right none, or settings / assistant)"; return line; }
             uint8_t how = CONTROLLER_HOLD;
             if (mode) {
                 size_t m = (size_t)(mode_end - mode);
@@ -94,14 +115,39 @@ static inline int controller_map_parse(const char *text, uint16_t map[CONTROLLER
                 }
                 if (extra < stop) { *error = "too many words after the Switch button"; return line; }
                 if (target == CONTROLLER_SWITCH_BUTTONS && how != CONTROLLER_HOLD) { *error = "none takes no mode"; return line; }
+                if (action > 0) { *error = "settings and assistant take no mode"; return line; }
             }
-            next[physical] = target == CONTROLLER_SWITCH_BUTTONS ? 0 : (uint16_t)(1u << target);
-            nextMode[physical] = how;
+            next[physical] = target < 0 || target == CONTROLLER_SWITCH_BUTTONS ? 0 : (uint16_t)(1u << target);
+            nextMode[physical] = action > 0 ? controller_action_mode(action) : how;
         }
         p = end ? end + 1 : NULL;
     }
     memcpy(map, next, sizeof next); memcpy(modes, nextMode, sizeof nextMode);
     return 0;
+}
+
+/* text (a layout file) with physical's line set to "name = target": every earlier line for that button goes, comments and
+   the other lines stay, the new line is last. Into out (size bytes); 0 if it does not fit. The settings menu's 操作
+   rows write controls.txt with it. */
+static inline int controller_map_set(const char *text, int physical, const char *target, char *out, size_t size) {
+    size_t used = 0;
+    const char *name = controller_physical_names[physical];
+    for (const char *p = text ? text : ""; *p;) {
+        const char *end = strchr(p, '\n'), *stop = end ? end + 1 : p + strlen(p), *key = p;
+        while (key < stop && (*key == ' ' || *key == '\t')) key++;
+        const char *key_end = key;
+        while (key_end < stop && !strchr("=# \t\r\n", *key_end)) key_end++;
+        int ours = (size_t)(key_end - key) == strlen(name) && !strncasecmp(key, name, (size_t)(key_end - key));
+        if (!ours) {
+            size_t n = (size_t)(stop - p);
+            if (used + n + 1 > size) return 0;
+            memcpy(out + used, p, n); used += n;
+            if (!end) { if (used + 2 > size) return 0; out[used++] = '\n'; }   /* the last line had no newline */
+        }
+        p = stop;
+    }
+    int n = snprintf(out + used, size - used, "%s = %s\n", name, target);
+    return n > 0 && (size_t)n < size - used;
 }
 
 /* The Switch buttons held, from the physical buttons held (bit i = physical button i). */

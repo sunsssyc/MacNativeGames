@@ -66,7 +66,7 @@ int main(void) {
     /* Mouse buttons (runtime/gamepad.m, key 7 on the Mac) are physical buttons 17-21. Default: left attacks (Y), right
        draws the bow (ZR, released by a left click: the shot), middle targets (ZL), the side buttons drive nothing. */
     enum { ML = 17, MR = 18, MM = 19, M4 = 20, M5 = 21 };
-    expect(CONTROLLER_BUTTONS == 22 && !strcmp(controller_physical_names[ML], "mouse_left") && !strcmp(controller_physical_names[MR], "mouse_right") &&
+    expect(CONTROLLER_BUTTONS == 24 && !strcmp(controller_physical_names[ML], "mouse_left") && !strcmp(controller_physical_names[MR], "mouse_right") &&
            !strcmp(controller_physical_names[MM], "mouse_middle") && !strcmp(controller_physical_names[M4], "mouse4") && !strcmp(controller_physical_names[M5], "mouse5"),
            "mouse button names");
     expect(press("", 1ULL << ML, &line) == Y && !line, "left click attacks (Y)");
@@ -77,6 +77,30 @@ int main(void) {
     expect(mode_of("mouse_right = zl\n", MR, &line) == CONTROLLER_HOLD, "a mouse line without a mode holds");
     expect(mode_of("mouse_middle = zr aim mouse5\n", MM, &line) == (CONTROLLER_AIM | M5 << 3), "a side button as a fire button");
     expect(mode_of("mouse_left = y tap\n", ML, &line) == CONTROLLER_TAP, "modes work on mouse buttons");
+    /* Home (22) and Share (23), and the buttons that open the settings menu or the assistant instead of a Switch button:
+       by default Home opens the settings menu, the touchpad and Share the assistant, and none of them reach the game. */
+    enum { TP = 16, HOME = 22, SHARE = 23 };
+    expect(!strcmp(controller_physical_names[HOME], "home") && !strcmp(controller_physical_names[SHARE], "share"), "home and share names");
+    expect(controller_mode_action((uint8_t)mode_of("", HOME, &line)) == CONTROLLER_ACTION_SETTINGS, "home opens the settings menu by default");
+    expect(controller_mode_action((uint8_t)mode_of("", TP, &line)) == CONTROLLER_ACTION_ASSISTANT &&
+           controller_mode_action((uint8_t)mode_of("", SHARE, &line)) == CONTROLLER_ACTION_ASSISTANT, "the touchpad and share open the assistant");
+    expect(press("", 1ULL << HOME | 1ULL << TP | 1ULL << SHARE, &line) == 0, "menu buttons drive no Switch button");
+    expect(controller_mode_action((uint8_t)mode_of("l3 = Assistant\n", 4, &line)) == CONTROLLER_ACTION_ASSISTANT && !line, "any button can open the assistant");
+    expect(press("l3 = settings\n", 1ULL << 4, &line) == 0 && !line, "a button that opens a menu leaves its Switch button");
+    expect(mode_of("home = none\n", HOME, &line) == CONTROLLER_HOLD && press("home = none\n", 1ULL << HOME, &line) == 0, "none frees home for macOS");
+    expect(press("home = minus\n", 1ULL << HOME, &line) == (1ULL << 11) && mode_of("home = minus\n", HOME, &line) == CONTROLLER_HOLD, "home as a Switch button");
+    expect(mode_of("home = settings tap\n", HOME, &line) == -1 && line == 1, "settings takes no mode");
+    expect(mode_of("share = assist\n", SHARE, &line) == -1 && line == 1, "unknown action");
+    /* controller_map_set: the settings menu's 操作 rows rewrite one button's line and keep the rest. */
+    char out[256];
+    expect(controller_map_set("", HOME, "assistant", out, sizeof out) && !strcmp(out, "home = assistant\n"), "set into an empty file");
+    expect(controller_map_set("# mine\nHome = settings # old\nsouth = a\n  home=none\nhomeless = b", HOME, "none", out, sizeof out) &&
+           !strcmp(out, "# mine\nsouth = a\nhomeless = b\nhome = none\n"), "earlier lines for the button go, comments and others stay");
+    expect(!controller_map_set("south = a\n", HOME, "assistant", out, 12), "too small: 0");
+    uint16_t map[CONTROLLER_BUTTONS]; uint8_t modes[CONTROLLER_BUTTONS]; const char *error = NULL;
+    controller_map_default(map, modes);
+    expect(controller_map_set("touchpad = settings\n", SHARE, "none", out, sizeof out) && !controller_map_parse(out, map, modes, &error) &&
+           controller_mode_action(modes[TP]) == CONTROLLER_ACTION_SETTINGS && !controller_mode_action(modes[SHARE]), "the result parses");
     if (failures) return 1;
     printf("PASS: controller layout cases\n");
     return 0;

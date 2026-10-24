@@ -2,6 +2,7 @@
    Python owns the read-only game-data tools and model backends; IPC is atomic JSON in the user data folder. */
 #import "hint_overlay.h"
 #include "game_version.h"
+#include "controller_map.h"   // CONTROLLER_UI_*: the controller in the panel (totk_hint_pad)
 #include <unistd.h>
 #import <AVFoundation/AVFoundation.h>
 #import <Speech/Speech.h>
@@ -23,6 +24,7 @@ static void hintDragMove(NSEvent *event);
 static void hintDragEnd(NSEvent *event);
 static void hintVoiceBegin(void);
 static void hintVoiceEnd(BOOL cancel);
+static void hintVoiceMeterLayout(void);   // hint_companion.inc: the level bars while listening
 static void hintOpen(void);
 // hint_voice.inc: pages of an answer and 朗读
 static NSString *hintPageText(NSString *answer);
@@ -245,6 +247,7 @@ static void hintLayout(CGFloat height){
  hintHistoryLayout(bodyWidth);   // 历史's list in the text's place (hint_history.inc)
  hintVoiceSetup.hidden=hintVoiceSetup.hidden||hintWelcome;hintVoiceSetup.frame=NSMakeRect(w-108,19,88,28);
  hintDisclosure.frame=NSMakeRect(20,16,w-40-(hintVoiceSetup.hidden?0:96),hintWelcome?82:34);
+ hintVoiceMeterLayout();
  hintQuestion.hidden=hintSend.hidden=hintWelcome;
  hintQuestion.frame=NSMakeRect(20,62,w-156,34);hintQuestion.font=hintFont(13);
  hintSend.frame=NSMakeRect(w-72,62,52,34);
@@ -536,5 +539,30 @@ BOOL totk_hint_key(NSEvent *event, BOOL down) {
  hintLastQuestion=hintPendingQuestion;hintPendingQuestion=nil;hintQuestion.stringValue=@"";[hintPanel makeFirstResponder:nil];[hintGame makeKeyWindow];
  hintDone=NO;hintWorking=YES;hintStarted=NSDate.date;if(reading)hintReadFollow(hintID);
  hintShow(@"让我想想……\n\nEsc 取消");return YES;
+}
+/* The controller (frontend.m front_pad_ui): its assistant button works as key 8. While the panel is open, A shows the
+   rest of an answer or presses the panel's main button (启用助手, 根据进度给提示), B closes it as Esc does, X starts and
+   ends a spoken question as 语音 does, up / down scroll the text. */
+static BOOL hintPadKey(unsigned short code){
+ NSEvent *e=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:hintGame.windowNumber context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:code];
+ return totk_hint_key(e,YES);
+}
+int totk_hint_pad(int event){
+ if(!hintGame)return 0;
+ if(event==CONTROLLER_UI_HELD)return hintPanel.visible;
+ if(event==CONTROLLER_UI_ASSISTANT)return hintPadKey(28);
+ if(!hintPanel.visible)return 0;
+ if(event==CONTROLLER_UI_BACK)return hintPadKey(53);
+ if(event==CONTROLLER_UI_ACCEPT){
+  if(hintPagesRemain())hintPageNext();
+  else if(!hintEnable.hidden&&hintEnable.enabled)[hintEnable performClick:nil];
+ }
+ if(event==CONTROLLER_UI_VOICE&&!hintMic.hidden&&hintMic.enabled)[hintActions voice:nil];
+ if(event==CONTROLLER_UI_UP||event==CONTROLLER_UI_DOWN){
+  NSClipView *clip=hintScroll.contentView;NSPoint at=clip.bounds.origin;CGFloat step=72*(event==CONTROLLER_UI_DOWN?1:-1)*(hintScroll.documentView.isFlipped?1:-1);
+  at.y=MAX(0,MIN(NSHeight(hintScroll.documentView.frame)-NSHeight(clip.bounds),at.y+step));
+  [clip scrollToPoint:at];[hintScroll reflectScrolledClipView:clip];
+ }
+ return 1;
 }
 #include "hint_test.inc"

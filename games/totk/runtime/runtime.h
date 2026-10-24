@@ -144,6 +144,12 @@ void runtime_mouse_move(double dx, double dy);      /* points, AppKit's deltaX /
 void runtime_mouse_button(int button, int down);    /* main thread; 0 left, 1 right, 2 middle, 3 and 4 the side buttons */
 void runtime_mouse_release(void);                   /* main thread: buttons up, stick centred */
 void runtime_touch_pad_set(const RuntimeGamepadState *state);   /* on-screen touch controls (iOS) */
+/* runtime/gamepad.m, main thread. The window's menus and the controller: ui answers controller_map.h CONTROLLER_UI_*
+   (frontend.m). The settings menu's 操作 rows: the buttons that open the settings menu or the assistant
+   (CONTROLLER_ACTION_*; bit i = physical button i), and giving one of them to another button (-1: none; 1 saved). */
+void runtime_gamepad_set_ui(int (*ui)(int event));
+uint64_t runtime_controller_action_buttons(int action);
+int runtime_controller_bind(int action, int physical);
 /* Controller rumble and motion (opt-in TOTK_RUMBLE=1 / TOTK_GYRO=1): the game's hid side in runtime/hid_feedback.c, the
    Mac controller's haptics and motion sensors in runtime/gamepad_feedback.m. */
 #define RUNTIME_MOTION_MAX 32

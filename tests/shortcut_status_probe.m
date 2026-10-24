@@ -36,6 +36,18 @@ void runtime_mouse_set_hook(void (*hook)(void)) { (void)hook; }
 void runtime_mouse_move(double dx, double dy) { (void)dx; (void)dy; }
 void runtime_mouse_button(int button, int down) { (void)button; (void)down; }
 void runtime_mouse_release(void) {}
+/* runtime/gamepad.m's settings and assistant buttons (controller_map.h) without GameController: the default layout. */
+static uint64_t fakeActions[CONTROLLER_ACTIONS] = {0, 1ULL << CONTROLLER_HOME, 1ULL << CONTROLLER_TOUCHPAD | 1ULL << CONTROLLER_SHARE};
+void runtime_gamepad_set_ui(int (*ui)(int event)) { (void)ui; }
+uint64_t runtime_controller_action_buttons(int action) { return fakeActions[action]; }
+int runtime_controller_bind(int action, int physical) {
+    for (int a = 1; a < CONTROLLER_ACTIONS && physical >= 0; a++) fakeActions[a] &= ~(1ULL << physical);
+    fakeActions[action] = physical < 0 ? 0 : 1ULL << physical;
+    return 1;
+}
+/* hint_overlay.m's side of the controller: whether its panel is open, and what it was handed. */
+static BOOL fakeHintOpen; static int hintPadEvents[16];
+int totk_hint_pad(int event) { if (event == CONTROLLER_UI_HELD) return fakeHintOpen; hintPadEvents[event]++; return 1; }
 static void press(unsigned key) {
     runtime_input_key_synthetic(key, 1);
     runtime_input_key_synthetic(key, 0);
@@ -129,10 +141,11 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert([panel hitTest:buttonPoint]==panel.collapseButton);
         assert([panel hitTest:[panel convertPoint:NSMakePoint(8,8) toView:host]]!=nil);
         /* Rows (quickSpecs): 0 cap 1 dynamic resolution 2 its lowest scale 3 render resolution 4 picture 5 edge smoothing
-           6 anisotropic filtering 7 interpolation 8 aspect | 9 controller 10 mouse | 11 AI channel. */
-        assert(panel.quickRows.count==12);
+           6 anisotropic filtering 7 interpolation 8 aspect | 9 controller 10 mouse | 11 AI channel | 12 the controller's
+           settings button 13 its assistant button (操作, after mouse) | 14 the AI channel's model (辅助, below the channel). */
+        assert(panel.quickRows.count==15);
         assert(panel.quickTabs.subviews.count==3 && panel.quickTab==0);
-        for (NSUInteger i=0;i<12;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i>=9));
+        for (NSUInteger i=0;i<15;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i>=9));
         assert(panel.quickHint.hiddenOrHasHiddenAncestor && !panel.quickStatus.hiddenOrHasHiddenAncestor);
         assert([panel.quickRows[3].title isEqualToString:@"渲染分辨率"] && [panel.quickRows[4].title isEqualToString:@"画面"]);
         assert([((TOTKQuickRow *)panel.quickRows[4]).value isEqualToString:@"原生 2K"]);
@@ -158,47 +171,72 @@ int main(int argc, const char **argv) { @autoreleasepool {
         [panel.quickRows[5] performClick:nil];tick();assert(taa_enabled()==before);
         NSButton *controlsTab=(NSButton *)[panel.quickTabs viewWithTag:1];
         [controlsTab performClick:nil];tick();assert(panel.quickTab==1);
-        for (NSUInteger i=0;i<12;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=9&&i!=10));
+        for (NSUInteger i=0;i<15;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=9&&i!=10&&i!=12&&i!=13));
         assert(panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickStatus.hiddenOrHasHiddenAncestor);
         int padBefore=fakePadType;[panel.quickRows[9] performClick:nil];tick();assert(fakePadType==gamepad_type_next(padBefore));
         int mouseBefore=fakeMouse;[panel.quickRows[10] performClick:nil];tick();assert(fakeMouse!=mouseBefore);
         assert(panel.quickFocused==10);
         assert([panel.quickHelpTitle.stringValue isEqualToString:panel.quickRows[10].title]);
         assert(panel.quickHelpText.stringValue.length>0 && ![panel.quickHelpText.stringValue isEqualToString:taaHelp]);
+        /* The controller's settings and assistant buttons: one button each when stepped, taken from the other row. */
+        TOTKQuickRow *padSettings=(TOTKQuickRow *)panel.quickRows[12],*padAssistant=(TOTKQuickRow *)panel.quickRows[13];
+        assert([padSettings.title isEqualToString:@"打开设置"] && [padSettings.value isEqualToString:@"Home 键"]);
+        assert([padAssistant.title isEqualToString:@"呼出露珠"] && [padAssistant.value isEqualToString:@"触控板 / 分享键"]);
+        [padSettings performClick:nil];tick();
+        assert([padSettings.value isEqualToString:@"触控板"] && [padAssistant.value isEqualToString:@"分享键"] && [panel.quickNote.stringValue isEqualToString:@"已保存：触控板"]);
+        padSettings.direction=-1;[padSettings performClick:nil];[padSettings performClick:nil];padSettings.direction=1;tick();
+        assert([padSettings.value isEqualToString:@"不用手柄键"] && [panel.quickHelpText.stringValue containsString:@"键盘按 9"]);
+        [padSettings performClick:nil];tick();assert([padSettings.value isEqualToString:@"Home 键"]);
         NSButton *assistantTab=(NSButton *)[panel.quickTabs viewWithTag:2];
         [assistantTab performClick:nil];tick();assert(panel.quickTab==2);
-        for (NSUInteger i=0;i<12;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=11));
+        for (NSUInteger i=0;i<15;i++) assert(panel.quickRows[i].hiddenOrHasHiddenAncestor==(i!=11&&i!=14));
         assert(!panel.quickHint.hiddenOrHasHiddenAncestor && panel.quickFocused==QUICK_HINT);
         assert(quickMenuOpen);[panel.quickHint performClick:nil];assert(hintClicks==1);
-        /* The AI channel: assistant.json "channel", everything else in the file kept; both directions wrap. */
+        /* The AI channel: a group (自动, Claude Code, Codex, 内置智能体) and its model, both written as assistant.json
+           "channel" (the hint service's backend), everything else in the file kept; both directions wrap. */
         NSString *assistant=quickAssistantPath(@"assistant.json");
         assert([@"{\"enabled\": true, \"agent\": {\"provider\": \"gemini\", \"model\": \"gemini-4-argon\"}}" writeToFile:assistant atomically:YES encoding:NSUTF8StringEncoding error:nil]);
-        tick();TOTKQuickRow *channel=(TOTKQuickRow *)panel.quickRows[11];
+        tick();TOTKQuickRow *channel=(TOTKQuickRow *)panel.quickRows[11],*model=(TOTKQuickRow *)panel.quickRows[14];
         assert([channel.value isEqualToString:@"自动（按顺序）"] && channel.enabled && channel.dropdown);
+        assert([model.title isEqualToString:@"模型"] && [model.value isEqualToString:@"按可用顺序"] && !model.enabled && model.dropdown);
         [channel performClick:nil];tick();
-        assert([quickChannel() isEqualToString:@"claude-code"] && [channel.value isEqualToString:@"Claude Code（本机）"]);
+        assert([quickChannel() isEqualToString:@"claude-code"] && [channel.value isEqualToString:@"Claude Code"]);
+        assert([model.value isEqualToString:@"Claude（本机登录）"] && model.enabled);
         assert([quickJSONFile(assistant)[@"enabled"] boolValue] && [quickJSONFile(assistant)[@"agent"][@"model"] isEqualToString:@"gemini-4-argon"]);
-        [channel performClick:nil];tick();assert([channel.value isEqualToString:@"Gemini 4（Vertex AI）"]);
+        [model performClick:nil];tick();
+        assert([quickChannel() isEqualToString:@"vertex-claude-code"] && [channel.value isEqualToString:@"Claude Code"] && [model.value isEqualToString:@"Claude（Vertex AI）"]);
+        assert([panel.quickNote.stringValue isEqualToString:@"下一个问题起先用 Claude Code · Claude（Vertex AI）"]);
+        [channel performClick:nil];tick();assert([quickChannel() isEqualToString:@"codex"] && !model.enabled);
+        [channel performClick:nil];tick();
+        assert([quickChannel() isEqualToString:@"agent"] && [channel.value isEqualToString:@"内置智能体"] && [model.value isEqualToString:@"Gemini 4（Vertex AI）"]);
         assert(panel.quickFocused==11 && [panel.quickChannelList.stringValue containsString:@"打开一次卡关助手后"] && !panel.quickChannelList.hiddenOrHasHiddenAncestor);
-        assert([@"{\"backends\": {\"agent\": {\"ok\": true, \"label\": \"Gemini 4（Vertex AI）\"}, \"codex\": {\"ok\": false, \"why\": \"没有安装\"}}}" writeToFile:quickAssistantPath(@"hint-backends.json") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+        assert([@"{\"backends\": {\"agent\": {\"ok\": true}, \"vertex\": {\"ok\": true}, \"codex\": {\"ok\": false, \"why\": \"没有安装\"}, \"claude-code\": {\"ok\": false}, \"vertex-claude-code\": {\"ok\": true}}}" writeToFile:quickAssistantPath(@"hint-backends.json") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
         tick();
-        assert([panel.quickChannelList.stringValue containsString:@"Gemini 4（Vertex AI）　可用 · 当前"] && [panel.quickChannelList.stringValue containsString:@"Codex（本机）　不可用：没有安装"]);
-        /* The dropdown: every channel at once, the current one selected, unusable ones marked; one click chooses. */
+        assert([panel.quickChannelList.stringValue containsString:@"内置智能体　Gemini 4（Vertex AI） 可用 · 当前　Claude（Vertex AI） 可用"]);
+        assert([panel.quickChannelList.stringValue containsString:@"Codex　不可用：没有安装"] && [panel.quickChannelList.stringValue containsString:@"Claude Code　Claude（本机登录） 不可用　Claude（Vertex AI） 可用"]);
+        /* The channel dropdown: the four groups, the current one selected, a group none of whose models works marked. */
         [panel quickOpenChoices:channel];TOTKQuickChoices *choices=(TOTKQuickChoices *)panel.quickChoices;
-        assert(choices && choices.options.count==6 && choices.options[2].state==NSControlStateValueOn && choices.highlighted==2);
-        assert([choices.options[3].title isEqualToString:@"Codex（本机）  · 不可用"] && NSContainsRect(panel.bounds,choices.list));
-        [choices.options[4] performClick:nil];tick();
+        assert(choices && choices.options.count==4 && choices.options[3].state==NSControlStateValueOn && choices.highlighted==3);
+        assert([choices.options[2].title isEqualToString:@"Codex  · 不可用"] && [choices.options[1].title isEqualToString:@"Claude Code"] && NSContainsRect(panel.bounds,choices.list));
+        [choices.options[1] performClick:nil];tick();   /* a group: the model in it that works */
         assert(!panel.quickChoices && [quickChannel() isEqualToString:@"vertex-claude-code"] && panel.quickFocused==11);
-        assert(menu_key(36,0,YES) && panel.quickChoices);   /* Return on the row opens it; Up / Down / Return choose */
-        assert(menu_key(126,0,YES) && ((TOTKQuickChoices *)panel.quickChoices).highlighted==3);
+        /* The model dropdown: the group's models; Return opens it, Up / Down / Return choose. */
+        [panel focusQuickRow:model];assert(panel.quickFocused==14);
+        assert(menu_key(36,0,YES) && panel.quickChoices && ((TOTKQuickChoices *)panel.quickChoices).options.count==2 && ((TOTKQuickChoices *)panel.quickChoices).highlighted==1);
+        assert([((TOTKQuickChoices *)panel.quickChoices).options[0].title isEqualToString:@"Claude（本机登录）  · 不可用"]);
+        assert(menu_key(126,0,YES) && ((TOTKQuickChoices *)panel.quickChoices).highlighted==0);
+        assert(menu_key(36,0,YES) && !panel.quickChoices && [quickChannel() isEqualToString:@"claude-code"] && panel.quickFocused==14);
+        [panel focusQuickRow:channel];
+        assert(menu_key(36,0,YES) && panel.quickChoices && menu_key(125,0,YES) && ((TOTKQuickChoices *)panel.quickChoices).highlighted==2);
         assert(menu_key(36,0,YES) && !panel.quickChoices && [quickChannel() isEqualToString:@"codex"]);
         assert(menu_key(49,0,YES) && panel.quickChoices && menu_key(53,0,YES) && !panel.quickChoices && quickMenuOpen);   /* Esc closes only the list */
         [panel quickOpenChoices:channel];[(TOTKQuickChoices *)panel.quickChoices mouseDown:[NSEvent new]];assert(!panel.quickChoices);   /* a click beside it */
         assert(quickChannelSet(@"agent"));tick();
         channel.direction=-1;[channel performClick:nil];channel.direction=1;[channel performClick:nil];   /* back, then forward again */
-        channel.direction=-1;[channel performClick:nil];[channel performClick:nil];channel.direction=1;tick();
-        assert([quickChannel() isEqualToString:@"auto"]);
-        channel.direction=-1;[channel performClick:nil];channel.direction=1;tick();assert([quickChannel() isEqualToString:@"vertex"]);
+        assert([quickChannel() isEqualToString:@"agent"]);
+        [channel performClick:nil];tick();assert([quickChannel() isEqualToString:@"auto"]);   /* wraps */
+        channel.direction=-1;[channel performClick:nil];channel.direction=1;tick();assert([quickChannel() isEqualToString:@"agent"]);
+        model.direction=-1;[model performClick:nil];model.direction=1;tick();assert([quickChannel() isEqualToString:@"vertex"]);
         assert([@"{ broken" writeToFile:assistant atomically:YES encoding:NSUTF8StringEncoding error:nil]);
         [channel performClick:nil];assert([[NSString stringWithContentsOfFile:assistant encoding:NSUTF8StringEncoding error:nil] isEqualToString:@"{ broken"]);
         /* Find tag zero among children, since viewWithTag:0 can return the container. */
@@ -235,6 +273,8 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert(menu_key(124,0,YES) && fakePadType==gamepad_type_next(keyboardPad));
         assert(menu_key(123,0,YES) && fakePadType==keyboardPad);
         assert(menu_key(125,0,YES) && panel.quickFocused==10);
+        assert(menu_key(125,0,YES) && panel.quickFocused==12);
+        assert(menu_key(125,0,YES) && panel.quickFocused==13);
         assert(menu_key(125,0,YES) && panel.quickFocused==9);
         assert(menu_key(48,0,YES) && panel.quickTab==2 && panel.quickFocused==QUICK_HINT);
         int clicks=hintClicks;assert(menu_key(36,0,YES) && hintClicks==clicks+1);
@@ -244,6 +284,13 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert(menu_key(48,NSEventModifierFlagShift,YES) && panel.quickTab==0);
         assert(!menu_key(48,NSEventModifierFlagCommand,YES) && panel.quickTab==0);
         assert(!menu_key(0,0,YES));
+        /* The controller (front_pad_ui): its presses work as the keys; the hint panel, when open, takes them first. */
+        assert(front_pad_ui(CONTROLLER_UI_HELD));
+        assert(front_pad_ui(CONTROLLER_UI_DOWN) && panel.quickFocused==1 && front_pad_ui(CONTROLLER_UI_UP) && panel.quickFocused==0);
+        assert(front_pad_ui(CONTROLLER_UI_NEXT_TAB) && panel.quickTab==1 && front_pad_ui(CONTROLLER_UI_PREVIOUS_TAB) && panel.quickTab==0);
+        fakeHintOpen=YES;assert(front_pad_ui(CONTROLLER_UI_DOWN) && panel.quickFocused==0 && hintPadEvents[CONTROLLER_UI_DOWN]==1);fakeHintOpen=NO;
+        assert(front_pad_ui(CONTROLLER_UI_ASSISTANT) && hintPadEvents[CONTROLLER_UI_ASSISTANT]==1 && quickMenuOpen);
+        assert(!front_pad_ui(CONTROLLER_UI_VOICE) && quickMenuOpen);   /* nothing to talk to in the menu */
         assert(menu_key(53,0,YES));
         assert(!menu_key(125,0,YES));
         assert(!panel.hidden&&!fps_overlay_full_hud()&&fps_overlay_hints_enabled());
@@ -256,6 +303,12 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert(fps_overlay_full_hud() && quickMenuOpen);assert(settingsPause);
         assert(!panel.quickTabs.hiddenOrHasHiddenAncestor && !panel.quickHelpTitle.hiddenOrHasHiddenAncestor);
         assert([panel.collapseButton.title containsString:@"收起"]);
+        /* Key 9 and the controller's settings button close the menu and open it again; B closes it too. */
+        NSEvent *nine=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil characters:@"9" charactersIgnoringModifiers:@"9" isARepeat:NO keyCode:25];
+        assert(front_settings_key(nine,YES) && !quickMenuOpen && !front_pad_ui(CONTROLLER_UI_HELD));
+        assert(front_pad_ui(CONTROLLER_UI_SETTINGS));tick();assert(quickMenuOpen && front_pad_ui(CONTROLLER_UI_HELD));
+        assert(front_pad_ui(CONTROLLER_UI_BACK) && !quickMenuOpen);
+        assert(front_settings_key(nine,YES));tick();assert(quickMenuOpen && settingsPause);
     }
     /* Key 1: all -> minimal (FPS only) -> off -> all. */
     hud_publish(HUD_FPS, "FPS 60  2560x1440", 0); hud_publish(HUD_SHADER, "New shaders 3 / total 9", 0);

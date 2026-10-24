@@ -10,6 +10,7 @@
 #import "hint_overlay.h"
 #include "totk_ui_lang.h"
 #include "gamepad_layout.h"
+#include "controller_map.h"   // the controller's settings and assistant buttons, and moving through menus with it
 #include "../third_party/d2r_gfx/gfx/nvn/totk_mfx_mode.h"
 int mfxup_output_enabled(void);
 static NSWindow *window;
@@ -27,6 +28,7 @@ static NSView *shortcutHelp;
 static BOOL mouseHeld;
 static BOOL quickMenuOpen;
 static BOOL quick_menu_key(NSEvent *event, BOOL down);
+static BOOL front_settings_key(NSEvent *event, BOOL down);
 static int textEntryOpen;
 static void front_mouse_update(void);
 int taa_enabled(void);   /* third_party/d2r_gfx/gfx/nvn/totk_taa.m: key 5 */
@@ -117,8 +119,8 @@ static CVReturn vsync_callback(CVDisplayLinkRef link,const CVTimeStamp *now,cons
 @end
 @implementation TOTKInputView
 -(BOOL)acceptsFirstResponder{return YES;}
--(void)keyDown:(NSEvent *)e{if(!totk_hint_key(e,YES)&&!quick_menu_key(e,YES))runtime_input_key(e.keyCode,1);}
--(void)keyUp:(NSEvent *)e{if(!totk_hint_key(e,NO)&&!quick_menu_key(e,NO))runtime_input_key(e.keyCode,0);}
+-(void)keyDown:(NSEvent *)e{if(!totk_hint_key(e,YES)&&!quick_menu_key(e,YES)&&!front_settings_key(e,YES))runtime_input_key(e.keyCode,1);}
+-(void)keyUp:(NSEvent *)e{if(!totk_hint_key(e,NO)&&!quick_menu_key(e,NO)&&!front_settings_key(e,NO))runtime_input_key(e.keyCode,0);}
 -(void)flagsChanged:(NSEvent *)e{if(e.keyCode==56)runtime_input_key(56,!!(e.modifierFlags&NSEventModifierFlagShift));if(e.keyCode==58)runtime_input_key(58,!!(e.modifierFlags&NSEventModifierFlagOption));}
 /* The game has no mouse controls. In native full screen, keep the pointer out of the picture while idle, but show it again
    as soon as it moves; restore it when the window loses focus or leaves full screen. */
@@ -370,13 +372,31 @@ void runtime_front_request_close(void){dispatch_async(dispatch_get_main_queue(),
    hid it; the legacy corner HUD (TOTK_HUD=corners) has no settings menu and no such item. */
 @interface TOTKSettingsItem:NSObject
 @end
-@implementation TOTKSettingsItem
--(void)open:(id)sender{(void)sender;
+/* Opens the settings menu; toggle: closes it when it is open (key 9, the controller's settings button). */
+static void front_settings_show(BOOL toggle){
  TOTKShortcutHelp *panel=(TOTKShortcutHelp *)shortcutHelp;if(!panel)return;
+ if(toggle&&quickMenuOpen){[panel toggleCollapsed:nil];return;}
  if(!fps_overlay_hints_enabled())runtime_shortcut_help_toggle();   // key 1's off: back to all
  dispatch_async(dispatch_get_main_queue(),^{if(!fps_overlay_full_hud())[panel toggleCollapsed:nil];[window makeKeyAndOrderFront:nil];});
 }
+@implementation TOTKSettingsItem
+-(void)open:(id)sender{(void)sender;front_settings_show(NO);}
 @end
+/* Key 9 (Mac key code 25) opens the settings menu and closes it again, beside Command-, and Esc (quick_menu_key). */
+static BOOL front_settings_key(NSEvent *e,BOOL down){
+ if(e.keyCode!=25||(e.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagOption))||!hud_compact())return NO;
+ if(down&&!e.isARepeat)front_settings_show(YES);
+ return YES;
+}
+/* The controller (runtime/gamepad.m, controller_map.h CONTROLLER_UI_*): its settings and assistant buttons, and moving
+   through the hint panel or the settings menu while one is open; the hint panel, which opens above the menu, first. */
+static int front_pad_ui(int event){
+ BOOL hint=totk_hint_pad(CONTROLLER_UI_HELD);
+ if(event==CONTROLLER_UI_HELD)return hint||(quickMenuOpen&&hud_compact());
+ if(event==CONTROLLER_UI_SETTINGS){if(!hud_compact())return 0;if(hint)totk_hint_pad(CONTROLLER_UI_BACK);front_settings_show(YES);return 1;}
+ if(event==CONTROLLER_UI_ASSISTANT||hint)return totk_hint_pad(event);
+ return quick_menu_pad(event);
+}
 static TOTKSettingsItem *settingsItem;
 static void front_settings_menu(NSMenu *appMenu){
  if(!hud_compact())return;
@@ -400,6 +420,7 @@ void runtime_front_run(void(*callback)(void)){
   bootStartNS=runtime_now_ns();
   [NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   runtime_mouse_set_hook(front_mouse_update);
+  runtime_gamepad_set_ui(front_pad_ui);
   runtime_gamepad_start();
   /* Default window: the docked output size, 1920x1080, scaled down (16:9 kept) when the screen's visible area is smaller. */
   /* TOTK_WINDOW_SIZE=<w>x<h> (test scripts only, e.g. the 2K output test; the desktop launcher never sets it): another starting size. */

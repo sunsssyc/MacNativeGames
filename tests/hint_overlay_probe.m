@@ -95,6 +95,14 @@ int main(int argc,const char **argv){@autoreleasepool{
  assert([hintText.stringValue containsString:@"已停止求助"]);assert([hintEnable.title isEqual:@"重新求助"]);
  hintWorking=YES;hintStarted=[NSDate date];[hintActions close:nil];assert(!hintWorking);
  assert(!assistantPaused);
+ // While listening, level bars sit left of the 正在听 line and follow the microphone's loudness (hintVoiceMeasure).
+ hintListening=YES;hintVoiceControls(YES);
+ assert(!hintVoiceMeter.hidden&&((TOTKHintLevel *)hintVoiceMeter).timer&&NSMinX(hintDisclosure.frame)>=NSMaxX(hintVoiceMeter.frame));
+ AVAudioPCMBuffer *tone=[[AVAudioPCMBuffer alloc] initWithPCMFormat:[[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32 sampleRate:16000 channels:1 interleaved:NO] frameCapacity:1600];
+ tone.frameLength=1600;for(int i=0;i<1600;i++)tone.floatChannelData[0][i]=0.1f*sinf(i*0.2f);
+ atomic_store(&hintVoicePeak,-120);hintVoiceMeasure(tone);float toneDb=atomic_load(&hintVoiceLevel);
+ assert(toneDb>-24&&toneDb<-22&&atomic_load(&hintVoicePeak)==toneDb);   // a 0.1 sine: -23 dBFS
+ hintListening=NO;hintVoiceControls(NO);assert(hintVoiceMeter.hidden&&!((TOTKHintLevel *)hintVoiceMeter).timer&&NSMinX(hintDisclosure.frame)==20);
  // Cancelled voice recognition must never submit a stale transcript.
  NSDictionary *beforeVoice=hintJSON(hintPath(@"hint-request.json"));
  hintListening=YES;hintTranscript=@"不应发送";NSUInteger stale=hintVoiceGeneration;
@@ -250,6 +258,14 @@ int main(int argc,const char **argv){@autoreleasepool{
  // The answer that talks about the circles does not stay in the bubble once they are gone, nor unexplained on reopening.
  assert([hintBubble.stringValue containsString:@"已清除"]);assert(!hintMarksWindow.hidesOnDeactivate);
  hintOpen();assert([hintDisclosure.stringValue containsString:@"圈画已清除"]);[hintActions close:nil];
+ // The controller (totk_hint_pad): its assistant button opens the panel as key 8 does, A turns a page as Return does, B
+ // closes it as Esc does; while it is closed only the assistant button reaches it.
+ assert(!totk_hint_pad(CONTROLLER_UI_HELD)&&!totk_hint_pad(CONTROLLER_UI_ACCEPT));
+ assert(totk_hint_pad(CONTROLLER_UI_ASSISTANT)&&hintPanel.visible&&totk_hint_pad(CONTROLLER_UI_HELD)&&assistantPaused);
+ hintWorking=NO;hintDone=YES;hintHistoryExpanded=NO;hintPagedAnswer=nil;hintShow(@"甲\n乙\n丙\n丁");assert(hintPagesRemain());
+ assert(totk_hint_pad(CONTROLLER_UI_ACCEPT)&&[hintText.stringValue isEqual:@"丁"]);
+ assert(totk_hint_pad(CONTROLLER_UI_DOWN)&&totk_hint_pad(CONTROLLER_UI_UP));
+ assert(totk_hint_pad(CONTROLLER_UI_BACK)&&!hintPanel.visible&&!totk_hint_pad(CONTROLLER_UI_HELD)&&!assistantPaused);
  shotFails=YES;[[NSFileManager defaultManager] removeItemAtPath:hintPath(@"hint-scene.png") error:nil];
  hintOpen();assert(!assistantPaused);   // waiting for the frame
  [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.8]];
