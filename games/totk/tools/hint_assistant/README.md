@@ -16,6 +16,34 @@
 
 「指给我看」会把这张图随问题一起发出去；`allow_screenshot` 默认打开，模型也可以在其他问题里按需用截图工具看这一帧（画面由游戏自己取，不用 macOS 的屏幕录制权限，设为 `false` 可关闭）。窗口被遮挡、游戏没出新画面时，0.6 秒后照常暂停，这次没有「指给我看」。截图工具（`allow_screenshot` 打开时）在游戏暂停期间也改用这一帧，因为暂停时没有新画面可截。实测：一张雨天画面里的发光图案，Claude Code 圈出的位置与图案本身相差约 1 像素（1040×540 的图）。
 
+## 攻略
+
+问神庙、机关或任务“怎么过”时，模型先调用 `guide`，不凭一帧画面猜解法（实测把顶上照下来的光认成了“发光碎块”）。`guide` 先认出是哪座神庙：`current` 先看实时状态（林克在神庙里就用存档记下的那座，在野外就取 600 米内最近的神庙入口），游戏没开时用存档；也可以传神庙/任务编号或中英文名字（“吉鲁塔古马奇”就能对上）。然后用游戏自己的英文名（Mals/USen，例如 Dungeon045 = Jirutagumac Shrine）同时去三个站取攻略：Zelda Wiki（MediaWiki API）、Samurai Gamers、IGN，每站 8 秒超时，取到的页面缓存 30 天（`~/Library/Caches/MacNativeGames/TOTK/hint-assistant/guides`）。Zelda Dungeon 和 Fandom 有 Cloudflare 拦截，不用。
+
+结果里还有 `names`：攻略里出现的道具、能力、左纳乌装置和地名在游戏里的中文原名（Wing → 翼、Cart → 平台车、Fan → 风扇机、Recall → 倒转乾坤），转述时用这些名字而不是自己翻译。`runtime_state` 里附近的物体也带上游戏原名 `name_zh`（SpObj_LiftGeneratorWing_A_01 → 翼）。提示词要求：两个以上来源一致才当事实，否则写成“建议”；按档位转述；最后注明参考的网站。「指给我看」只圈攻略里提到、画面里确实认得出的东西。Claude Code 另外开了 WebSearch / WebFetch，`guide` 查不到时可以自己搜（`claude_code.web: false` 关闭）；`guides.enabled: false` 关掉 `guide`。
+
+命令行：`run.py guide 吉鲁塔古马奇神庙`、`run.py guide current`。实测（Claude Code，2 档）：12 秒、2 轮，答出“翼加平台车做飞机、风扇推进，宝箱靠搭桥加通天术”，注明三个来源。
+
+## 记忆
+
+助手记在这台 Mac 上（`assistant-memory.json`，在数据目录里，不进仓库）：每次回答后服务自动记一条（时间、存档所在的神庙、档位、问题、回答第一行，最多 200 条）；模型也可以用 `memory` 工具记一句玩家说过的偏好或情况（“只要方向”“已经拿到究极手”，最多 60 条），或查以前的问答、删掉某条。每次求助的提示词带上全部记下的偏好、同一座神庙的最近 3 条问答和最近 3 条问答，要求照偏好回答、和之前的回答保持一致。血量、位置这类会变的状态不记。`memory.enabled: false` 关闭。命令行：`run.py memory [关键词]`；`run.py hint --memory <文件>` 用指定的记忆文件测试。
+
+## 内置智能体（任何模型）
+
+`agent` 后端是助手自己的智能体循环（`agent.py`，思路来自 pi：一个小核心，模型 + 工具循环 + 几个工具就是一个智能体），不需要 Claude Code 或 Codex，接一个“裸”模型 API 就能按步骤查资料：
+
+- 接入（`agent.provider`）：`anthropic`（Messages API）、`openai`（任何 OpenAI 兼容的 `/chat/completions`：OpenAI、DeepSeek、通义千问、OpenRouter，或本机的 Ollama、LM Studio、llama.cpp；`base_url` 是 localhost 时不需要密钥）、`vertex`。密钥从环境变量 `agent.api_key_env` 或文件 `agent.api_key_file` 读，不写进 assistant.json。
+- 循环：模型要工具就执行、把结果送回，最多 `agent.max_turns`（默认 10）轮，最后一轮不给工具，保证有回答；回答流式显示在面板上。工具出错（参数不是 JSON、工具不存在、查不到）作为错误结果交回模型，不中断请求。
+- 工具：全部 harness 工具，加上 `plan`（写下 2–4 步要查什么、做完打勾，面板显示“正在规划”）和 `research`（交给一个只能查资料的子智能体：它有自己的上下文，读长攻略和游戏文本，只把要点和来源交回来，主上下文不被攻略原文撑满；它的文字不会显示到面板上）。
+- 不会函数调用的模型：`agent.tool_protocol: "text"`，工具说明写进系统提示，模型写 `<tool>{"name": ..., "arguments": {...}}</tool>`，结果以 `<result>` 送回。模型写在 `<think>` 里的推理不显示。不能看图的模型设 `agent.vision: false`。
+
+```json
+"agent": {"provider": "openai", "model": "qwen3.8:27b-mlx", "base_url": "http://localhost:11434/v1", "api_key_env": null},
+"backends": ["agent"]
+```
+
+`vertex` 后端现在也走这个循环（`streamRawPredict` 流式）。Vertex 可以用 JSON 凭据文件登录，不依赖 gcloud：`vertex.credentials` 填服务账号密钥或 authorized-user 文件的路径（文件留在原处，不复制）。服务账号用系统自带的 `/usr/bin/openssl` 签名，密钥通过管道传入、不写任何文件；令牌缓存到过期前 5 分钟。项目没写时用凭据里的 `project_id`。`vertex-claude-code` 后端和 Google 朗读也用同一个文件。注意 Vertex 的 Claude 配额按项目计，同一个项目换服务账号不会多出配额。
+
 ## 自动测试面板
 
 测试会话（`TOTK_HINT_TEST=1`，配合存档副本 `TOTK_PROFILE_DIR` 和 `TOTK_SLOT_OWNER`）里，命令通道（数据目录的 `input.txt`）接受 `hint` 命令，在游戏进程里驱动面板，不模拟全局按键（`runtime/hint_test.inc`）：`hint open | close | ask <问题> | point [<问题>] | next | read | key <Mac 键码> | snap <png> | state <json>`。`snap` 把暂停的画面、圈画、露珠和面板合成一张图（游戏自己的截图不含这些窗口）；`state` 写出面板上显示的内容和各按钮状态，供脚本检查。测试会话里朗读音量为 0。非测试会话收到 `hint` 命令只记一行日志。
@@ -36,7 +64,7 @@ Google 和系统声音不占 GPU：收起面板后继续读完；本地克隆随
 
 ## 启用和游戏操作
 
-需要 Python 3.14（标准库 `compression.zstd`），以及已登录的 Claude Code 或 Codex；Vertex AI 是后备，可使用本机已有的 gcloud 项目和认证。不会创建云资源或更改登录配置。
+需要 Python 3.14（标准库 `compression.zstd`），以及已登录的 Claude Code 或 Codex；Vertex AI 是后备，可使用本机已有的 gcloud 项目和认证，或一个凭据 JSON 文件；也可以用内置智能体接任何模型 API（见上文）。不会创建云资源或更改登录配置。
 
 ```sh
 python3.14 games/totk/tools/hint_assistant/run.py config --init
@@ -57,9 +85,9 @@ python3.14 games/totk/tools/hint_assistant/run.py hint --tier 1 --question '下�
 python3.14 games/totk/tools/hint_assistant/run.py mcp
 ```
 
-MCP 使用标准输入/输出逐行 JSON-RPC。始终提供 `game_state`、`quest_log`、`search_text`（存档与游戏文本）和 `runtime_state`、`wait_state`（运行时只读）；只有传入 `--allow-screenshot` 才提供 `screenshot`，只有传入 `--allow-actions` 才提供 `press_button`、`stop_action`。所有诊断写 stderr；截图通过已有游戏命令通道生成，不抓取其他应用。`--config`、`--romfs` 和 `--save-root` 可用于独立配置和测试存档。
+MCP 使用标准输入/输出逐行 JSON-RPC。始终提供 `game_state`、`quest_log`、`search_text`（存档与游戏文本）、`guide`（攻略）、`memory`（助手的记忆，`--memory` 指定文件）和 `runtime_state`、`wait_state`（运行时只读）；只有传入 `--allow-screenshot` 才提供 `screenshot`，只有传入 `--allow-actions` 才提供 `press_button`、`stop_action`。所有诊断写 stderr；截图通过已有游戏命令通道生成，不抓取其他应用。`--config`、`--romfs` 和 `--save-root` 可用于独立配置和测试存档。
 
-自动后端顺序：Claude Code → Codex → Claude Code 的 Vertex AI provider → Vertex AI REST。前一个不可用、失败或超时后才继续；取消不会尝试后备。每个后端默认最长 45 秒，合计不超过 150 秒，剩余不足 5 秒时不再启动下一个后端。第一档成功后，同一会话的后续档位会带上之前提示。
+自动后端顺序：Claude Code → Codex → Claude Code 的 Vertex AI provider → Vertex AI REST → 内置智能体（`agent.model` 没设时跳过）。前一个不可用、失败或超时后才继续；取消不会尝试后备。每个后端默认最长 45 秒，合计不超过 150 秒，剩余不足 5 秒时不再启动下一个后端。第一档成功后，同一会话的后续档位会带上之前提示。
 
 `assistant.json` 保存设置，`hint-request.json` / `hint-response.json` 是原子写入的本机 IPC；缓存和模型临时运行目录位于 `~/Library/Caches/MacNativeGames/TOTK/hint-assistant`。截图保留最近几份。
 
@@ -69,7 +97,7 @@ MCP 使用标准输入/输出逐行 JSON-RPC。始终提供 `game_state`、`ques
 python3.14 -m unittest discover -s games/totk/tools/hint_assistant/tests -v
 ```
 
-测试只用合成存档、临时目录及模型桩：覆盖后备顺序、取消、三级上下文、旧响应丢弃、启动请求竞态、MCP 错误恢复、中文当前任务日志与输出限制。不连接模型，不读取玩家真实存档。完整游戏画面、真实存档版本和真实后端端到端验证需在用户已启用的环境中另行完成。
+测试只用合成存档、临时目录及模型桩：覆盖后备顺序、取消、三级上下文、旧响应丢弃、启动请求竞态、MCP 错误恢复、中文当前任务日志与输出限制；攻略抓取和清洗（假网页）、神庙认定、名称对照；智能体循环（原生和文本协议、计划、子智能体、最后一轮不给工具）、三种接入的请求和流式解析、记忆、服务账号签名（临时生成的密钥，用公钥验签）。不连接模型，不读取玩家真实存档。完整游戏画面、真实存档版本和真实后端端到端验证需在用户已启用的环境中另行完成。
 
 
 ## 直接游戏运行时工具

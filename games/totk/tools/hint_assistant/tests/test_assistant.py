@@ -32,7 +32,7 @@ class AssistantTests(unittest.TestCase):
             return backend
         with patch.object(backends, 'make', side_effect=make):
             result = service.hint(self.config, tier=2, allow_screenshot=False)
-        self.assertEqual(attempted, list(config.BACKENDS))
+        self.assertEqual(attempted, list(config.BACKENDS[:config.BACKENDS.index('vertex') + 1]))   # vertex answers
         self.assertEqual(result['text'], '先向北走。')
         self.assertEqual(result['tier'], 2)
         self.assertEqual(len(result['attempts']), 3)
@@ -159,7 +159,7 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(len(results), 7)
         self.assertEqual(results[0]['error']['code'], -32700)
         self.assertEqual([t['name'] for t in results[2]['result']['tools']],
-                         ['wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text'])
+                         ['wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text', 'guide', 'memory'])
         self.assertEqual([r['error']['code'] for r in results[3:6]], [-32602] * 3)
         self.assertEqual(results[-1]['result'], {})
         self.assertEqual(harness.Harness(allow_screenshot=True).tool_specs()[-1]['name'], 'screenshot')

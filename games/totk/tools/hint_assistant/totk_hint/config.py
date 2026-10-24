@@ -8,7 +8,7 @@ from pathlib import Path
 from .romfs import DATA_DIR
 
 PATH = DATA_DIR / 'assistant.json'
-BACKENDS = ('claude-code', 'codex', 'vertex-claude-code', 'vertex')
+BACKENDS = ('claude-code', 'codex', 'vertex-claude-code', 'vertex', 'agent')
 DEFAULTS = {
     'enabled': False,             # the game's launcher starts the hint service (serve) only when true
     'backends': list(BACKENDS),   # "auto" tries these in order until one answers
@@ -32,11 +32,25 @@ DEFAULTS = {
     # macOS system voice. "local" also shows the panel's 下载语音 / 录我的声音; "google" and "system" use only that one.
     'voice': {'enabled': False, 'engine': 'auto', 'google_voice': 'cmn-CN-Chirp3-HD-Leda', 'google_monthly_chars': 900_000,
               'unload_after_seconds': 120},
-    'claude_code': {'path': None, 'model': 'opus', 'effort': 'low'},
+    # web: Claude Code may also search the web (WebSearch / WebFetch) for what the guide tool does not cover
+    'claude_code': {'path': None, 'model': 'opus', 'effort': 'low', 'web': True},
+    # guide (guides.py): shrine and quest walkthroughs from Zelda Wiki, Samurai Gamers and IGN, for every backend
+    'guides': {'enabled': True, 'timeout': 8},
     'codex': {'path': None, 'model': None, 'effort': 'low'},
     # Vertex AI: Claude Code with its Vertex provider (vertex-claude-code) and the direct REST client (vertex)
+    # credentials: a service account key or authorized-user JSON file to sign in with instead of gcloud (its path only;
+    # the file stays where it is and is never copied)
     'vertex': {'project': None, 'region': 'global', 'model': 'claude-opus-5-5', 'effort': 'low',
-               'fallback_model': 'claude-opus-4-8', 'gcloud': None},
+               'fallback_model': 'claude-opus-4-8', 'gcloud': None, 'credentials': None},
+    # agent: the assistant's own agent loop (agent.py) with a plain model. provider "anthropic" (Messages API),
+    # "openai" (any OpenAI-compatible server; base_url e.g. http://localhost:11434/v1 for Ollama needs no key) or
+    # "vertex". The key comes from the environment variable api_key_env or the file api_key_file, never this file.
+    # tool_protocol "text" for a model without function calling; vision false for one that takes no pictures.
+    'agent': {'provider': 'anthropic', 'model': None, 'base_url': None, 'api_key_env': 'ANTHROPIC_API_KEY',
+              'api_key_file': None, 'effort': None, 'tool_protocol': 'native', 'vision': True, 'max_turns': 10,
+              'research': True},
+    # memory (memory.py): earlier answers and the model's notes about the player, in assistant-memory.json
+    'memory': {'enabled': True},
 }
 
 
@@ -72,7 +86,7 @@ def load(path=None):
         timeout = config[key]
         if isinstance(timeout, bool) or not isinstance(timeout, (float, int)) or not 1 <= timeout <= 600:
             raise ValueError(f'{path}: {key} must be between 1 and 600')
-    for key in ('claude_code', 'codex', 'vertex', 'voice'):
+    for key in ('claude_code', 'codex', 'vertex', 'voice', 'agent', 'memory', 'guides'):
         if not isinstance(config[key], dict):
             raise ValueError(f'{path}: {key} must be an object')
     voice = config['voice']
@@ -83,6 +97,11 @@ def load(path=None):
     chars = voice.get('google_monthly_chars')
     if isinstance(chars, bool) or not isinstance(chars, int) or chars < 0:
         raise ValueError(f'{path}: voice.google_monthly_chars must be a whole number of characters')
+    agent = config['agent']
+    if agent.get('provider') not in ('anthropic', 'openai', 'vertex'):
+        raise ValueError(f'{path}: agent.provider must be anthropic, openai or vertex')
+    if agent.get('tool_protocol') not in ('native', 'text'):
+        raise ValueError(f'{path}: agent.tool_protocol must be native or text')
     tier = config.get('tier_default')
     config['tier_default'] = tier if tier in (1, 2, 3) else 1
     return config

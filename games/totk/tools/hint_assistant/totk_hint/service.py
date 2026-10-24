@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import backends as backendmod
 from . import config as configmod
+from . import memory as memorymod
 from . import scene as scenemod
 from . import voice as voicemod
 from .harness import Harness
@@ -40,17 +41,20 @@ CHINESE = re.compile('[\u4e00-\u9fff]')   # the answer is Chinese: text without 
 STAGES = {'game_state': '正在看存档', 'quest_log': '正在看任务日志', 'search_text': '正在查游戏文本',
           'screenshot': '正在看画面', 'runtime_state': '正在看林克的位置', 'wait_state': '正在看林克的位置',
           'press_button': '正在操作游戏', 'stop_action': '正在松开按键', 'mark_screen': '正在圈画面',
+          'guide': '正在查攻略', 'WebSearch': '正在搜索攻略', 'WebFetch': '正在读攻略网页', 'memory': '正在翻记忆',
+          'plan': '正在规划', 'research': '正在查资料',
           'Read': '正在看画面'}   # Read: Claude Code opening the attached picture
 
 
 def hint(config, tier=None, backend='auto', question=None, previous=None, allow_screenshot=None, romfs=None,
          save_root=None, cancel=None, progress=None, scene_image=None, allow_actions=False, on_event=None,
-         scene_size=None):
+         scene_size=None, memory=None):
     """{"text", "tier", "backend", "model", "seconds", "attempts"}; raises BackendError when no backend answers.
     Each backend gets timeout_seconds, all of them together total_timeout_seconds. allow_actions offers the input tools
     (the caller checks assistant.json allow_actions and the player's consent for this request). on_event gets the
     backend's progress: ('tool', name) and ('text', the answer so far). scene_size (the picture's width, height) with
-    scene_image offers mark_screen, and its marks come back in "marks"."""
+    scene_image offers mark_screen, and its marks come back in "marks". memory (a memory.Memory) adds what is
+    remembered to the prompt, and "about" in the result is the place the save is in, for remembering this answer."""
     if cancel is not None and cancel.is_set():
         raise backendmod.Cancelled()
     tier = tier if tier in (1, 2, 3) else config['tier_default']
@@ -67,6 +71,13 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
                    '回答里用“圈出的……”指代。画面里看不到相关的东西就不要圈，直接说明。')
     else:
         prompt += '\n本次当前画面：' + ('已附带游戏窗口截图。先看画面，再回答；存档只作为历史背景。' if scene_image else '不可用。不能假装看到了当前场景，不能把存档当作实时状态。')
+    about = None
+    if memory:
+        about = Harness(config, romfs, save_root, memory=memory).whereabouts()
+        remembered = memory.context(about)
+        if remembered:
+            prompt += ('\n记忆（之前在这台 Mac 上的求助；记下的偏好要照做，和之前的回答保持一致，不要原样重复）：\n'
+                       + '\n'.join(remembered))
     attempts = []
     for name in backendmod.order(backend, config):
         if cancel is not None and cancel.is_set():
@@ -86,6 +97,7 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
                                  allow_actions, on_event)
         ctx.scene_image = scene_image
         ctx.scene_size = tuple(scene_size) if scene_image and scene_size else None
+        ctx.memory_path = memory.path if memory else None
         try:
             answer = b.run(SYSTEM, prompt, ctx)
         except backendmod.BackendError as e:
@@ -98,7 +110,7 @@ def hint(config, tier=None, backend='auto', question=None, previous=None, allow_
         marks = scenemod.read_marks(ctx.marks) if ctx.marks else None
         return {'text': text, 'tier': tier, 'backend': name, 'model': answer.get('model'), 'marks': marks,
                 'seconds': round(time.monotonic() - t0, 1), 'attempts': attempts, 'raw': answer['text'],
-                'turns': answer.get('turns'), 'cost_usd': answer.get('cost_usd')}
+                'turns': answer.get('turns'), 'cost_usd': answer.get('cost_usd'), 'about': about}
     raise backendmod.BackendError('没有可用的模型后端：' + '；'.join(attempts) if attempts else '没有配置模型后端')
 
 
@@ -129,6 +141,8 @@ class Service:
         self.current = None  # (request id, cancel event, thread)
         self.lock = threading.Lock()
         self.voice = voicemod.VoiceService(self.folder, config, log)
+        self.memory = memorymod.Memory(self.folder / 'assistant-memory.json') \
+            if (config.get('memory') or {}).get('enabled', True) else None
 
     def respond(self, request, status, **fields):
         value = {'id': request.get('id'), 'session': request.get('session'), 'status': status, 'time': time.time()}
@@ -213,7 +227,7 @@ class Service:
         try:
             result = hint(self.config, tier, request.get('backend') or 'auto', question or None, previous,
                           request.get('screenshot'), self.romfs, self.save_root, cancel, progress, scene_image=scene_image,
-                          allow_actions=actions, on_event=event, scene_size=scene_size)
+                          allow_actions=actions, on_event=event, scene_size=scene_size, memory=self.memory)
         except backendmod.Cancelled:
             finish()
             self.voice.stop(str(request['id']))
@@ -242,6 +256,11 @@ class Service:
             self.sessions[session] = turns[-MAX_HISTORY_TURNS:]
             while len(self.sessions) > MAX_SESSIONS:
                 del self.sessions[next(iter(self.sessions))]
+        if self.memory:
+            try:
+                self.memory.record_answer(question, tier, result['text'], result.get('about'), result['backend'])
+            except OSError as e:
+                self.log(f'[hint] could not remember the answer: {e}')
         self.log(f'[hint] request {request.get("id")} tier {tier} by {result["backend"]} in {result["seconds"]} s'
                  + (f' (skipped: {"; ".join(result["attempts"])})' if result['attempts'] else ''))
         self.respond(request, 'done', tier=tier, text=result['text'], backend=result['backend'],

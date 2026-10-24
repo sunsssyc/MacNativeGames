@@ -4,10 +4,13 @@ hint is grounded instead of guessed. Shared by the MCP server (Claude Code, Code
     game_state   where Link is, health and abilities, story progress and collection counts (newest save)
     quest_log    active quests with the adventure log's text for the current step and where its map targets are
     search_text  the game's Simplified Chinese text (quests, places, items, tips, dialogue)
+    guide        how a shrine or a quest is solved, from public guides found by the game's own English name (guides.py)
+    memory       earlier questions and answers, and notes the model keeps about the player (memory.py)
     screenshot   the game window, only while the game runs and only when the player allowed it
 
 Everything is read-only. The only thing ever written outside the cache is the "wshot <png>" line the game's command
-channel understands (runtime/input.c), and only for screenshot."""
+channel understands (runtime/input.c), and only for screenshot; guide reads public web pages and caches them, and
+memory writes the assistant's own memory file."""
 import base64
 import json
 import math
@@ -18,6 +21,8 @@ import time
 from pathlib import Path
 
 from .live import BUTTONS
+from . import guides as guidemod
+from . import memory as memorymod
 from . import save as savemod
 from . import scene as scenemod
 from . import tables as tablemod
@@ -39,6 +44,8 @@ SEARCH_SOURCES = (('ChallengeMsg/', '任务日志'), ('LocationMsg/', '地名'),
                   ('StaticMsg/Tips', '提示'), ('ActorMsg/', '角色与物品'), ('StaticMsg/', '游戏说明'), ('LayoutMsg/', '界面'),
                   ('EventFlowMsg/', '对话与事件'), ('NpcTerrorMsg/', '对话与事件'), ('ShoutMsg/', '对话与事件'))
 SHOTS = tablemod.CACHE_ROOT / 'shots'
+CURRENT = ('', 'current', 'here', '当前', '这里', '这个')
+SHRINE_NEAR = 600   # m: the shrine "here" is, when Link stands in the world (an entrance is a few dozen metres across)
 
 
 class ToolError(Exception):
@@ -86,6 +93,7 @@ LIVE_WORDS = (('TrolleyRail', '矿车轨道'), ('WindGenerator', '风扇'), ('Wa
               ('Dungeon', '神庙'), ('Gerudo', '格鲁德族'), ('Rito', '利特族'), ('Zora', '佐拉族'), ('Goron', '鼓隆族'),
               ('Tree', '树'), ('Apple', '苹果'), ('BeeHome', '蜂巢'), ('Bee', '蜜蜂'), ('Stone', '石'), ('Iron', '铁'), ('Wood', '木'), ('Ice', '冰'), ('Fire', '火'),
               ('Water', '水'), ('Electric', '电'))
+CONTROL = re.compile(r'〔[^〕]*〕')   # what formats.msbt leaves of a text's control codes ("旅人之剑〔按键〕")
 SIDES = ('正前方', '右前方', '右侧', '右后方', '正后方', '左后方', '左侧', '左前方')
 
 
@@ -194,15 +202,20 @@ def _quarter(v):
 
 class Harness:
     def __init__(self, config=None, romfs=None, save_root=None, allow_screenshot=False, allow_actions=False,
-                 marks=None, scene_size=None):
+                 marks=None, scene_size=None, memory=None):
         self.config = config or {}
+        # memory: the file (or a Memory) the memory tool reads and writes; off with assistant.json memory.enabled false
+        on = (self.config.get('memory') or {}).get('enabled', True)
+        self.memory = (memory if isinstance(memory, memorymod.Memory) else memorymod.Memory(memory)) if on else None
         self.romfs = romfs
         self.roots = savemod.save_roots(save_root, self.config)
         self.allow_screenshot = allow_screenshot
         self.allow_actions = allow_actions   # press_button / stop_action: the player allowed this request to act
         self.marks, self.scene_size = marks, scene_size   # mark_screen: where to write, on a picture this size (指给我看)
         self._tables = None
+        self._tables_en = None
         self._places = None
+        self._glossary = None
 
     # data -------------------------------------------------------------------------------------------------------------
     @property
@@ -210,6 +223,13 @@ class Harness:
         if self._tables is None:
             self._tables = tablemod.load(self.romfs, self.config)
         return self._tables
+
+    @property
+    def tables_en(self):
+        """The game's English text (USen), for the names guides know a place or a quest by."""
+        if self._tables_en is None:
+            self._tables_en = tablemod.load(self.romfs, self.config, language='USen')
+        return self._tables_en
 
     @property
     def places(self):
@@ -453,6 +473,156 @@ class Harness:
             return '已经历' if order.index(label) < order.index(state) else '当前步骤' if label == state else '尚未到达'
         return '未知'
 
+    # guides -----------------------------------------------------------------------------------------------------------
+    def _live(self):
+        """runtime_state as live_view gives it, or None when the game does not answer."""
+        try:
+            from .live import call
+            state = call('state').get('state')
+        except (ValueError, TimeoutError, OSError, AttributeError):
+            return None
+        return live_view(state) if isinstance(state, dict) and state.get('position') else None
+
+    def _nearest_shrine(self, pos):
+        """(id, distance in metres) of the shrine entrance nearest to a world position."""
+        best = (math.inf, None)
+        for loc in self.tables.locations:
+            if loc['category'] == 'Shrine' and loc['field'] == 'MainField':
+                best = min(best, (min(math.dist(pos, p) for p in loc['pos']), loc['key']))
+        return best[1], best[0]
+
+    def _named(self, text):
+        """(id, kind) of the place or quest a name means: exact Chinese or English names first, then a part of one."""
+        t, en = self.tables, self.tables_en
+        if text in t.names:
+            return text, 'place'
+        if text in t.by_name:
+            return text, 'quest'
+        q = text.lower().replace(' ', '')
+        candidates = []
+        for kind, pairs in (('place', list(t.names.items()) + list(en.names.items())),
+                            ('quest', [(c['name'], t.quest_name(c['name'])) for c in t.challenges] +
+                                      [(c['name'], en.quest_name(c['name'])) for c in t.challenges])):
+            for key, name in pairs:
+                n = (name or '').lower().replace(' ', '')
+                if n and (n == q or q in n):
+                    candidates.append((n != q, not key.startswith('Dungeon'), len(n), key, kind))
+        if not candidates:
+            raise ToolError(f'游戏里没有叫“{text}”的神庙、地点或任务；先用 search_text 核对游戏里的原名')
+        candidates.sort()
+        exact = [c for c in candidates if not c[0]]
+        keys = list(dict.fromkeys(c[3] for c in (exact or candidates)))
+        if len(keys) > 1 and not exact:
+            shown = '、'.join(t.place_name(k) or t.quest_name(k) or k for k in keys[:8])
+            raise ToolError(f'“{text}”对得上好几个：{shown}；请用完整名字再查')
+        return candidates[0][3], candidates[0][4]
+
+    def whereabouts(self):
+        """{id, name} of the shrine or interior the newest save is in, else None: what an answer is remembered as about."""
+        try:
+            s = self.slot()
+            return self._where(s.load(), s.caption)[2]
+        except (ToolError, OSError, ValueError):
+            return None
+
+    def memory_tool(self, action, text=None, about=None, note_id=None):
+        if not self.memory:
+            raise ToolError('记忆已关闭（assistant.json memory.enabled）')
+        if action == 'recall':
+            return self.memory.recall(text, about)
+        if action == 'note':
+            try:
+                return {'saved': self.memory.note(text, about), 'text': text}
+            except ValueError as e:
+                raise ToolError(str(e)) from None
+        if action == 'forget':
+            return {'forgotten': self.memory.forget(str(note_id or ''))}
+        raise ToolError('action 只能是 recall、note 或 forget')
+
+    def _current(self):
+        """(shrine id, how it was chosen) for "the one I am in": the live state first, the save as a fallback."""
+        live = self._live()
+        try:
+            s = self.slot()
+            _, _, inside = self._where(s.load(), s.caption)
+        except (ToolError, OSError, ValueError):
+            inside = None
+        saved = inside['id'] if inside and inside['id'].startswith('Dungeon') else None
+        guess = (live or {}).get('scene_guess') or ''
+        if guess.startswith('标题'):
+            raise ToolError('游戏在标题画面或加载中，还没进入存档，说不出是哪座神庙')
+        if live and guess.startswith('在神庙里'):
+            if saved:
+                return saved, '林克此刻在神庙里（实时），存档记录进入的是这座'
+            raise ToolError('林克此刻在神庙里，但存档没有记下是哪一座：请玩家说出神庙名字，再用名字查')
+        if live:
+            key, d = self._nearest_shrine(live['position'])
+            if saved and d > SHRINE_NEAR:   # inside a shrine the position is the shrine's own: far from every entrance
+                return saved, '存档记录在这座神庙里，实时位置附近没有神庙入口（多半还在里面）'
+            if key and d <= SHRINE_NEAR:
+                return key, f'离林克最近的神庙入口（实时位置，约 {round(d, -1):.0f} 米）'
+            raise ToolError(f'林克附近 {SHRINE_NEAR} 米内没有神庙；问的若是任务或别的地方，请用名字查')
+        if saved:
+            return saved, '上次存档在这座神庙里（游戏没有在运行，无法实时核对）'
+        raise ToolError('游戏没有在运行，存档也不在神庙里：请用神庙或任务的名字查')
+
+    def glossary(self, text, limit=40):
+        """{English name: the game's Chinese name} of the items, abilities, Zonai devices and places a guide's text
+        mentions (Wing → 翼, Recall → 倒转乾坤): a retelling uses the game's names, not a translation of the guide's."""
+        if self._glossary is None:
+            t, en, pairs = self.tables, self.tables_en, {}
+            for english, chinese in ((en.items, t.items), (en.names, t.names)):
+                for key, name in english.items():
+                    if name and len(name) >= 3 and chinese.get(key):
+                        pairs.setdefault(CONTROL.sub('', name).strip(), CONTROL.sub('', chinese[key]).strip())
+            names = sorted(pairs, key=len, reverse=True)   # Light of Blessing before Light
+            pattern = re.compile(r'(?i)\b(' + '|'.join(re.escape(n) for n in names) + r')(?:e?s)?\b') if names else None
+            self._glossary = (pattern, {n.lower(): (n, pairs[n]) for n in names})
+        pattern, by_lower = self._glossary
+        found = {}
+        for m in pattern.finditer(text) if pattern else ():
+            name, chinese = by_lower[m.group(1).lower()]
+            found.setdefault(name, chinese)
+            if len(found) == limit:
+                break
+        return found
+
+    def actor_name(self, actor):
+        """The game's Chinese name of an actor in the live state, when it has one: SpObj_LiftGeneratorWing_A_01 is the
+        Zonai device 翼 (its capsule's name), weapons and materials are named as in the pouch."""
+        items = self.tables.items
+        name = items.get(actor)
+        m = re.match(r'^(SpObj_\w+?)_([A-Z]_\d+)$', actor)
+        if not name and m:
+            name = items.get(f'{m.group(1)}_Capsule_{m.group(2)}') or items.get(f'{m.group(1)}_Capsule_A_01')
+        return CONTROL.sub('', name).strip() or None if name else None
+
+    def guide(self, target=None):
+        text = str(target or '').strip()
+        if text.lower() in CURRENT:
+            key, how = self._current()
+            kind = 'place'
+        else:
+            (key, kind), how = self._named(text), f'按名字“{text}”'
+        t, en = self.tables, self.tables_en
+        name = (t.place_name(key) if kind == 'place' else t.quest_name(key)) or key
+        name_en = en.place_name(key) if kind == 'place' else en.quest_name(key)
+        if not name_en:
+            raise ToolError(f'{name} 没有英文名，找不到攻略页')
+        label = '神庙' if key.startswith('Dungeon') else '任务' if kind == 'quest' else '地点'
+        pages = guidemod.fetch(name_en, timeout=float((self.config.get('guides') or {}).get('timeout') or 8))
+        out = {'target': {'id': key, 'name': name, 'name_en': name_en, 'kind': label, 'chosen_by': how},
+               'sources': pages}
+        if pages:
+            out['names'] = self.glossary('\n'.join(p['text'] for p in pages))
+        if pages:
+            out['note'] = ('攻略原文是英文网站的完整解法：只按玩家要的档位转述；names 是攻略里出现的名称在游戏里的中文原名，'
+                           '转述时一律用它（例如 Wing 说“翼”，不要自己翻译），其他名称拿不准用 search_text 核对；回答末尾注明'
+                           '依据的网站名；几处来源不一致时以多数为准，说不准的步骤以“建议”开头')
+        else:
+            out['note'] = '这次没取到攻略（网络不通或网站没有这一页）：不要凭画面猜解法，可以请玩家描述眼前的机关'
+        return out
+
     # screenshot -------------------------------------------------------------------------------------------------------
     @staticmethod
     def game_pid():
@@ -528,7 +698,8 @@ class Harness:
                  'duration_ms': {'type': 'integer', 'minimum': 0, 'maximum': 1000}}, 'additionalProperties': False}},
             {'name': 'runtime_state',
              'description': 'Read the running game now: Link\'s position and facing, the camera, the objects within '
-                            '150 m (the game\'s internal names with a kind and a Chinese gloss guessed from the name, '
+                            '150 m (the game\'s internal names with a kind and, where the game has one, its Chinese name '
+                            '(name_zh), else a Chinese gloss guessed from the name, '
                             'where they are and on which side of Link), and a scene guess (title screen, in a shrine) '
                             'judged from them. Health and quests are not read live. Never substitute saved values.',
              'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
@@ -575,6 +746,32 @@ class Harness:
                  'limit': {'type': 'integer', 'description': 'at most this many lines (default 10, max 30)'}},
                  'required': ['query'], 'additionalProperties': False}},
         ]
+        if (self.config.get('guides') or {}).get('enabled', True):
+            specs.append(
+                {'name': 'guide',
+                 'description': "How a shrine or a quest is solved, from public walkthroughs (Zelda Wiki, Samurai Gamers, "
+                                "IGN; English, the full solution, cached). The target is found by the game's own names: "
+                                "\"current\" for the shrine Link is in or standing at (live state, then the save), or a "
+                                "shrine/quest id, or its Chinese or English name. Returns the official Chinese and English "
+                                "names and each source's text with its URL. Use it before explaining a puzzle; never solve "
+                                "one from a picture alone. Retell only as much as the hint tier allows.",
+                 'inputSchema': {'type': 'object', 'properties': {
+                     'target': {'type': 'string', 'description': 'current (default), an id such as Dungeon045, or a name'}},
+                     'additionalProperties': False}})
+        if self.memory:
+            specs.append(
+                {'name': 'memory',
+                 'description': "The assistant's memory of this player, kept across requests and game sessions. recall: "
+                                "earlier questions and answers and the notes kept, optionally only those with the given "
+                                "words or about a place id. note: keep one short sentence worth knowing next time (the "
+                                "player's stated preferences, e.g. only directions; what they already know or did). "
+                                "forget: drop a note by its id. Not for the game's state, which the other tools read.",
+                 'inputSchema': {'type': 'object', 'properties': {
+                     'action': {'type': 'string', 'enum': ['recall', 'note', 'forget']},
+                     'text': {'type': 'string', 'description': 'recall: words to look for; note: the sentence to keep'},
+                     'about': {'type': 'string', 'description': 'a place or quest id it concerns, e.g. Dungeon045'},
+                     'id': {'type': 'string', 'description': 'forget: the note id'}},
+                     'required': ['action'], 'additionalProperties': False}})
         if self.marks and self.scene_size:
             specs.append(scenemod.TOOL)
         if self.allow_screenshot:
@@ -598,6 +795,14 @@ class Harness:
                 raise ToolError(str(e)) from e
             if isinstance(result, dict) and isinstance(result.get('state'), dict):
                 view = live_view(result['state'])
+                for entry in view.get('nearby') or ():
+                    try:
+                        zh = self.actor_name(entry['name'])
+                    except Exception:   # the tables are a nicety here too
+                        zh = None
+                    if zh:
+                        entry['name_zh'] = zh   # the game's own name: the guessed gloss is then not needed
+                        entry.pop('gloss', None)
                 if view.get('position') and 'scene_guess' not in view:   # world coordinates: name the place
                     try:
                         view['near_places'] = self.places.near(view['position'], limit=2)
@@ -612,6 +817,10 @@ class Harness:
                                            args.get('slot')), None
         elif name == 'search_text':
             result, image = self.search_text(args.get('query'), args.get('limit') or 10), None
+        elif name == 'guide':
+            result, image = self.guide(args.get('target')), None
+        elif name == 'memory':
+            result, image = self.memory_tool(args.get('action'), args.get('text'), args.get('about'), args.get('id')), None
         elif name == 'screenshot':
             result, image = self.screenshot()
         elif name == 'mark_screen':

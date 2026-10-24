@@ -1,23 +1,31 @@
-"""Anthropic models on Google Cloud Vertex AI over REST (publishers/anthropic/models/<model>:rawPredict), with the
-harness tools run in this process: for Macs without Claude Code or Codex. Standard library only.
+"""Anthropic models on Google Cloud Vertex AI over REST (publishers/anthropic/models/<model>:streamRawPredict), with the
+harness tools run in this process by the assistant's own agent loop (agent.py): for Macs without Claude Code or Codex.
+Standard library only.
 
-The access token comes from `gcloud auth print-access-token` (the gcloud sign-in on this Mac); the project from
-assistant.json vertex.project, ANTHROPIC_VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT, or `gcloud config get-value project`.
-Nothing here enables APIs, creates resources or changes Google Cloud settings: a model that is not enabled for the
-project is reported as an error."""
+The access token comes from a credentials file when there is one (assistant.json vertex.credentials, else
+GOOGLE_APPLICATION_CREDENTIALS): a service account key (signed with the system's openssl, the key passed through a
+pipe, never written anywhere) or an authorized-user file (gcloud auth application-default login). Without one it is
+`gcloud auth print-access-token`, the gcloud sign-in on this Mac. The project is assistant.json vertex.project,
+ANTHROPIC_VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT, the credentials file's project, or `gcloud config get-value project`.
+Nothing here enables APIs, creates resources or changes Google Cloud settings (gcloud's own sign-in is never touched): a
+model that is not enabled for the project is reported as an error."""
+import base64
 import json
 import os
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from pathlib import Path
 
 from .backends import BackendError, find_binary
-from .harness import Harness, ToolError, image_block
+
+TOKEN_URL = 'https://oauth2.googleapis.com/token'
+SCOPE = 'https://www.googleapis.com/auth/cloud-platform'
+OPENSSL = '/usr/bin/openssl'
 
 ANTHROPIC_VERSION = 'vertex-2023-10-16'   # the request body field Vertex AI requires
-MAX_TURNS = 8
-MAX_TOKENS = 16000
 _cache = {}
 
 
@@ -27,9 +35,96 @@ def gcloud(config):
                                                   '~/google-cloud-sdk/bin/gcloud', '/opt/homebrew/share/google-cloud-sdk/bin/gcloud'))
 
 
+def credentials_file(config):
+    """The Google credentials file to sign in with, or None (then gcloud)."""
+    path = (config.get('vertex') or {}).get('credentials') or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    return Path(path).expanduser() if path else None
+
+
+def credentials(config):
+    """The credentials file's contents, or None; BackendError when it is named but unusable."""
+    path = credentials_file(config)
+    if not path:
+        return None
+    try:
+        info = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as e:
+        raise BackendError(f'the Google credentials file {path} cannot be read: {type(e).__name__}') from None
+    kind = info.get('type') if isinstance(info, dict) else None
+    if kind == 'service_account' and info.get('private_key') and info.get('client_email'):
+        return info
+    if kind == 'authorized_user' and info.get('refresh_token') and info.get('client_id'):
+        return info
+    raise BackendError(f'{path}: not a service account key or an authorized-user credentials file (type {kind})')
+
+
+def _b64(data):
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+
+
+def _post_form(url, fields, timeout=30):
+    request = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode(), method='POST',
+                                     headers={'Content-Type': 'application/x-www-form-urlencoded'})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read())
+            message = detail.get('error_description') or detail.get('error') or detail
+        except ValueError:
+            message = e.reason
+        raise BackendError(f'Google sign-in refused (HTTP {e.code}): {str(message)[:200]}') from None
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        raise BackendError(f'Google sign-in failed: {e}') from None
+
+
+def token_from(info, now=None):
+    """(access token, seconds it lasts) for a service account key or an authorized-user file."""
+    url = info.get('token_uri') or TOKEN_URL
+    if info['type'] == 'authorized_user':
+        reply = _post_form(url, {'grant_type': 'refresh_token', 'client_id': info['client_id'],
+                                 'client_secret': info.get('client_secret', ''), 'refresh_token': info['refresh_token']})
+    else:
+        now = int(now or time.time())
+        header = {'alg': 'RS256', 'typ': 'JWT'}
+        if info.get('private_key_id'):
+            header['kid'] = info['private_key_id']
+        claims = {'iss': info['client_email'], 'sub': info['client_email'], 'scope': SCOPE, 'aud': url,
+                  'iat': now, 'exp': now + 3600}
+        signing = f'{_b64(json.dumps(header).encode())}.{_b64(json.dumps(claims).encode())}'
+        read, write = os.pipe()   # the key reaches openssl through a pipe: it is never written to a file
+        try:
+            os.write(write, info['private_key'].encode())
+            os.close(write)
+            write = None
+            signed = subprocess.run([OPENSSL, 'dgst', '-sha256', '-sign', f'/dev/fd/{read}'], input=signing.encode(),
+                                    capture_output=True, pass_fds=(read,), timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise BackendError(f'openssl did not sign the sign-in request: {e}') from None
+        finally:
+            os.close(read)
+            if write is not None:
+                os.close(write)
+        if signed.returncode != 0 or not signed.stdout:
+            raise BackendError('openssl could not sign with the service account key: '
+                               + (signed.stderr.decode(errors='replace').strip().splitlines() or [''])[-1][:200])
+        reply = _post_form(url, {'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+                                 'assertion': f'{signing}.{_b64(signed.stdout)}'})
+    if not reply.get('access_token'):
+        raise BackendError('Google sign-in returned no access token')
+    return reply['access_token'], int(reply.get('expires_in') or 3600)
+
+
 def project_and_region(config):
     v = config.get('vertex') or {}
     project = v.get('project') or os.environ.get('ANTHROPIC_VERTEX_PROJECT_ID') or os.environ.get('GOOGLE_CLOUD_PROJECT')
+    if not project:
+        try:
+            info = credentials(config)
+        except BackendError:
+            info = None
+        project = (info or {}).get('project_id') or (info or {}).get('quota_project_id')
     if not project:
         binary = gcloud(config)
         if binary:
@@ -58,14 +153,27 @@ class VertexREST:
         self.settings = config.get('vertex') or {}
 
     def available(self):
-        if not gcloud(self.config):
-            return False, 'gcloud is not installed'
+        try:
+            signed_in = credentials(self.config) is not None or gcloud(self.config)
+        except BackendError as e:
+            return False, str(e)
+        if not signed_in:
+            return False, 'no Google sign-in (assistant.json vertex.credentials, or gcloud installed and signed in)'
         project, _ = project_and_region(self.config)
         if not project:
             return False, 'no Google Cloud project (assistant.json vertex.project or gcloud config set project)'
         return True, ''
 
     def token(self):
+        info = credentials(self.config)
+        if info is not None:
+            key = ('token', str(credentials_file(self.config)))
+            cached = _cache.get(key)
+            if cached and time.monotonic() < cached[1]:
+                return cached[0]
+            token, lasts = token_from(info)
+            _cache[key] = (token, time.monotonic() + max(60, lasts - 300))
+            return token
         binary = gcloud(self.config)
         cached = _cache.get(('token', binary))
         if cached and time.monotonic() - cached[1] < 40 * 60:
@@ -80,82 +188,10 @@ class VertexREST:
         _cache[('token', binary)] = (token, time.monotonic())
         return token
 
-    def post(self, model, body, timeout):
-        project, region = project_and_region(self.config)
-        request = urllib.request.Request(endpoint(project, region, model), data=json.dumps(body).encode(), method='POST',
-                                         headers={'Authorization': f'Bearer {self.token()}',
-                                                  'Content-Type': 'application/json; charset=utf-8'})
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read())
-        except urllib.error.HTTPError as e:
-            try:
-                detail = json.loads(e.read())
-                message = (detail.get('error') or {}).get('message') if isinstance(detail.get('error'), dict) else detail
-            except ValueError:
-                message = e.reason
-            if e.code == 404:
-                message = f'model {model} is not available to project {project} in {region} ({message})'
-            raise BackendError(f'Vertex AI HTTP {e.code}: {str(message)[:300]}') from None
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise BackendError(f'Vertex AI request failed: {e}') from None
-
     def run(self, system, prompt, ctx):
-        harness = Harness(self.config, ctx.romfs, ctx.save_root, ctx.allow_screenshot, ctx.allow_actions, ctx.marks,
-                          ctx.scene_size)
-        tools = [{'name': s['name'], 'description': s['description'], 'input_schema': s['inputSchema']}
-                 for s in harness.tool_specs()]
-        model = self.settings.get('model') or 'claude-opus-5-5'
-        fallback = self.settings.get('fallback_model')
-        content = [{'type': 'text', 'text': prompt}]
-        if ctx.scene_image:
-            mime, data = image_block(ctx.scene_image)
-            content.insert(0, {'type': 'image', 'source': {'type': 'base64', 'media_type': mime, 'data': data}})
-        messages = [{'role': 'user', 'content': content}]
-        deadline = time.monotonic() + ctx.timeout
-        calls = 0
-        for turn in range(MAX_TURNS):
-            ctx.check()
-            remaining = deadline - time.monotonic()
-            if remaining <= 5:
-                raise BackendError(f'Vertex AI did not answer within {ctx.timeout:.0f} s')
-            body = {'anthropic_version': ANTHROPIC_VERSION, 'max_tokens': MAX_TOKENS, 'system': system,
-                    'messages': messages, 'tools': tools}
-            if self.settings.get('effort'):
-                body['output_config'] = {'effort': self.settings['effort']}
-            response = self.post(model, body, min(remaining, 180))
-            stop = response.get('stop_reason')
-            if stop == 'refusal':
-                # no server-side fallback on Vertex AI: send the same conversation once to the fallback model
-                if fallback and model != fallback:
-                    model = fallback
-                    continue
-                raise BackendError('the model declined this request')
-            content = response.get('content') or []
-            messages.append({'role': 'assistant', 'content': content})   # unchanged: thinking blocks stay valid
-            if stop == 'tool_use':
-                results = []
-                for block in content:
-                    if block.get('type') != 'tool_use':
-                        continue
-                    calls += 1
-                    ctx.event('tool', block.get('name'))
-                    try:
-                        text, image = harness.call(block.get('name'), block.get('input') or {})
-                        result = [{'type': 'text', 'text': text}]
-                        if image:
-                            mime, data = image_block(image)
-                            result.append({'type': 'image', 'source': {'type': 'base64', 'media_type': mime, 'data': data}})
-                        results.append({'type': 'tool_result', 'tool_use_id': block['id'], 'content': result})
-                    except ToolError as e:
-                        results.append({'type': 'tool_result', 'tool_use_id': block['id'], 'content': str(e), 'is_error': True})
-                    except Exception as e:
-                        results.append({'type': 'tool_result', 'tool_use_id': block['id'],
-                                        'content': f'{type(e).__name__}: {e}', 'is_error': True})
-                messages.append({'role': 'user', 'content': results})   # all results of this turn in one message
-                continue
-            text = ''.join(b.get('text', '') for b in content if b.get('type') == 'text').strip()
-            if not text:
-                raise BackendError(f'Vertex AI returned no text (stop reason {stop})')
-            return {'text': text, 'model': model, 'turns': turn + 1, 'tool_calls': calls}
-        raise BackendError(f'no answer after {MAX_TURNS} tool rounds')
+        """The assistant's agent loop (agent.py) with this model: tool calls, plan and research, streamed answers."""
+        from .agent import VertexProvider, run
+        try:
+            return run(VertexProvider(self), system, prompt, ctx, self.config, self.settings)
+        except BackendError as e:
+            raise BackendError(f'Vertex AI: {e}') from None

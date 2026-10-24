@@ -258,8 +258,8 @@ class GoogleVoice:
         return self.settings.get('google_monthly_chars', 900_000) - self.used()
 
     def ready(self):
-        from .vertex import gcloud, project_and_region
-        return bool(gcloud(self.config)) and bool(project_and_region(self.config)[0]) and self.left() > 0
+        from .vertex import VertexREST
+        return VertexREST(self.config).available()[0] and self.left() > 0
 
     def prepare(self):
         self._token()   # the sign-in, cached for 40 minutes

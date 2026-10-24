@@ -99,6 +99,7 @@ class Server:
 def main(args):
     scene_size = tuple(int(v) for v in args.scene_size.split('x')) if args.scene_size else None
     harness = Harness(romfs=args.romfs, save_root=args.save_root, allow_screenshot=args.allow_screenshot,
-                      allow_actions=args.allow_actions, marks=args.marks, scene_size=scene_size, config=args.config_data)
+                      allow_actions=args.allow_actions, marks=args.marks, scene_size=scene_size, config=args.config_data,
+                      memory=args.memory)
     Server(harness).run()
     return 0

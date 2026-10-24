@@ -5,6 +5,8 @@
                          the user's ~/.codex/config.toml is not read (--ignore-user-config) and never written
     vertex-claude-code   Claude Code with its Vertex AI provider (CLAUDE_CODE_USE_VERTEX=1)
     vertex               Anthropic models on Vertex AI over REST (vertex.py), for Macs without Claude Code
+    agent                the assistant's own agent loop (agent.py) with any model behind an API: Anthropic, an
+                         OpenAI-compatible server (a local one too), or Vertex AI; assistant.json "agent"
 
 "auto" tries assistant.json "backends" in order and takes the first answer."""
 import glob
@@ -22,7 +24,7 @@ from pathlib import Path
 from . import tables as tablemod
 
 RUN_PY = Path(__file__).resolve().parents[1] / 'run.py'
-TOOLS = ('wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text')
+TOOLS = ('wait_state', 'runtime_state', 'game_state', 'quest_log', 'search_text', 'guide', 'memory')
 ACTION_TOOLS = ('press_button', 'stop_action')   # only for a request the player allowed to act (Context.allow_actions)
 CODEX_FEATURES_OFF = ('apps', 'browser_use', 'browser_use_external', 'computer_use', 'image_generation', 'in_app_browser',
                       'plugins', 'remote_plugin', 'hooks', 'goals', 'memories')
@@ -52,6 +54,7 @@ class Context:
         self.cancel = cancel   # a threading.Event, or None
         self.timeout = timeout or config.get('timeout_seconds') or 120
         self.workdir = tablemod.CACHE_ROOT / 'runs' / uuid.uuid4().hex[:12]
+        self.memory_path = None   # the memory file of the service that asked (memory.py); default: the game's folder
 
     @property
     def marks(self):
@@ -73,6 +76,8 @@ class Context:
             args += ['--save-root', str(self.save_root)]
         if self.config.get('_path'):
             args += ['--config', self.config['_path']]
+        if self.memory_path:
+            args += ['--memory', str(self.memory_path)]
         return sys.executable, args
 
     def check(self):
@@ -201,8 +206,8 @@ class ClaudeCode:
             project, _ = project_and_region(self.config)
             if not project:
                 return False, 'no Google Cloud project (assistant.json vertex.project or gcloud config)'
-            adc = Path(os.environ.get('GOOGLE_APPLICATION_CREDENTIALS') or
-                       '~/.config/gcloud/application_default_credentials.json').expanduser()
+            adc = Path((self.config.get('vertex') or {}).get('credentials') or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+                       or '~/.config/gcloud/application_default_credentials.json').expanduser()
             if not adc.is_file():
                 return False, 'no Google application default credentials (gcloud auth application-default login)'
         return True, ''
@@ -216,7 +221,10 @@ class ClaudeCode:
         mcp_file.write_text(json.dumps(mcp, ensure_ascii=False))
         tools = [f'mcp__totk-harness__{t}' for t in TOOLS + (ACTION_TOOLS if ctx.allow_actions else ())
                  + (('mark_screen',) if ctx.marks else ())]
-        builtin = ''
+        builtin = []
+        if self.settings.get('web', True):   # walkthroughs guide cannot find (a quest, an item, a boss)
+            builtin += ['WebSearch', 'WebFetch']
+            tools += ['WebSearch', 'WebFetch']
         # stream-json with partial messages: the answer is shown as it is written, tool calls as they start
         command = [binary, '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
                    '--system-prompt', system, '--mcp-config', str(mcp_file),
@@ -226,20 +234,22 @@ class ClaudeCode:
             from .harness import SHOTS
             SHOTS.mkdir(parents=True, exist_ok=True)
             tools += ['mcp__totk-harness__screenshot', f'Read(/{SHOTS}/**)']
-            builtin = 'Read'
+            builtin.append('Read')
             command += ['--add-dir', str(SHOTS)]
         if ctx.scene_image:
-            builtin = 'Read'
+            builtin.append('Read')
             tools += [f'Read(/{ctx.scene_image})']
             command += ['--add-dir', str(ctx.scene_image.parent)]
             prompt = f'先用 Read 查看本次游戏窗口截图：{ctx.scene_image}\n' + prompt
-        command += ['--tools', builtin, '--allowedTools', ','.join(tools)]
+        command += ['--tools', ','.join(dict.fromkeys(builtin)), '--allowedTools', ','.join(tools)]
         env = tool_env(binary)
         if self.vertex:
             from .vertex import project_and_region
             project, region = project_and_region(self.config)
             v = self.config.get('vertex') or {}
             env.update(CLAUDE_CODE_USE_VERTEX='1', ANTHROPIC_VERTEX_PROJECT_ID=project, CLOUD_ML_REGION=region)
+            if (self.config.get('vertex') or {}).get('credentials'):   # the same key file as the vertex backend
+                env['GOOGLE_APPLICATION_CREDENTIALS'] = str(Path(self.config['vertex']['credentials']).expanduser())
             model, effort = v.get('model'), v.get('effort')
         else:
             model, effort = self.settings.get('model'), self.settings.get('effort')
@@ -383,19 +393,22 @@ def make(name, config):
     if name == 'vertex':
         from .vertex import VertexREST
         return VertexREST(config)
-    raise BackendError(f'unknown backend {name} (choose from auto, claude-code, codex, vertex-claude-code, vertex)')
+    if name == 'agent':
+        from .agent import AgentBackend
+        return AgentBackend(config)
+    raise BackendError(f'unknown backend {name} (choose from auto, claude-code, codex, vertex-claude-code, vertex, agent)')
 
 
 def order(name, config):
     if name in (None, '', 'auto'):
-        return [n for n in config.get('backends') or () if n in ('claude-code', 'codex', 'vertex-claude-code', 'vertex')]
+        return [n for n in config.get('backends') or () if n in ('claude-code', 'codex', 'vertex-claude-code', 'vertex', 'agent')]
     return [name]
 
 
 def report(config):
     """[(backend, available, reason)] for every backend."""
     out = []
-    for name in ('claude-code', 'codex', 'vertex-claude-code', 'vertex'):
+    for name in ('claude-code', 'codex', 'vertex-claude-code', 'vertex', 'agent'):
         try:
             ok, why = make(name, config).available()
         except Exception as e:

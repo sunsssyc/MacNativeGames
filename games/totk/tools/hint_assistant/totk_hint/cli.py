@@ -47,6 +47,7 @@ def main(argv=None):
                    help='let the model look at the game window (only while the game runs)')
     p.add_argument('--json', action='store_true', help='print the whole result as JSON')
     p.add_argument('--prompt-only', action='store_true', help='print the prompt instead of asking a model')
+    p.add_argument('--memory', help='use and update this memory file (memory.py), as the service does with its own')
     p = sub.add_parser('serve', help='answer the game\'s key 8 requests (hint-request.json -> hint-response.json)')
     _common(p)
     p.add_argument('--accept-pending', action='store_true', help='handle a request written during service startup')
@@ -60,6 +61,7 @@ def main(argv=None):
                    'takes presses only for a request the player allowed in the panel)')
     p.add_argument('--marks', help='offer mark_screen, writing the marks to this file (指给我看)')
     p.add_argument('--scene-size', help='WIDTHxHEIGHT of the picture mark_screen marks')
+    p.add_argument('--memory', help='the memory file the memory tool uses (default: assistant-memory.json in the game\'s data folder)')
     p = sub.add_parser('state', help='print game_state')
     _common(p)
     p.add_argument('--slot', help='slot_00 ... slot_05 (default: the save being played)')
@@ -71,6 +73,12 @@ def main(argv=None):
     _common(p)
     p.add_argument('query', nargs='+')
     p.add_argument('--limit', type=int, default=10)
+    p = sub.add_parser('guide', help='print what the guide tool finds (a shrine or quest walkthrough)')
+    _common(p)
+    p.add_argument('target', nargs='*', help='current (default), an id such as Dungeon045, or a Chinese or English name')
+    p = sub.add_parser('memory', help='print the assistant\'s memory (notes and earlier answers)')
+    _common(p)
+    p.add_argument('query', nargs='*', help='only entries with these words')
     p = sub.add_parser('backends', help='which model backends can run here')
     _common(p)
     p = sub.add_parser('tables', help='build (or rebuild) the cached tables from the game data')
@@ -151,6 +159,10 @@ def main(argv=None):
             _print(harness.quest_log(args.query, args.all, 40))
         elif args.command == 'search':
             _print(harness.search_text(' '.join(args.query), args.limit))
+        elif args.command == 'guide':
+            _print(harness.guide(' '.join(args.target)))
+        elif args.command == 'memory':
+            _print(harness.memory_tool('recall', ' '.join(args.query)))
         elif args.command == 'hint':
             from . import service
             if args.prompt_only:   # what the service sends: no save is read ahead, the model calls the tools
@@ -158,8 +170,12 @@ def main(argv=None):
                 tier = args.tier or config['tier_default']
                 print(SYSTEM + '\n\n' + user_prompt(tier, args.question, None, bool(args.screenshot)))
                 return 0
+            from .memory import Memory
+            memory = Memory(args.memory) if args.memory else None
             result = service.hint(config, args.tier, args.backend, args.question, None, args.screenshot, args.romfs,
-                                  args.save_root)
+                                  args.save_root, memory=memory)
+            if memory:
+                memory.record_answer(args.question, result['tier'], result['text'], result.get('about'), result['backend'])
             if args.json:
                 _print(result)
             else:
