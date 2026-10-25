@@ -73,3 +73,10 @@ Freshness is checked in two ways: sample age and an observation fingerprint of t
 AS values plus world position. If the observation does not change for 0.6 seconds,
 movement reactions return to idle. This is a conservative stale-state fallback,
 not a full game-menu detector; perfectly static battle stance can also relax to idle.
+
+Validated on 2026-10-25 with a muted copied 1.4.3 save: stand/run/stop,
+jump → fall → land, bow/combat, inventory freezing an old 5.555 speed while
+the pet returns to idle, and movement resuming after inventory closes. All 19
+clip assets (515 frames) matched the built bundle. Seven added clips (87 frames)
+passed per-frame alpha-margin validation. Water, rides and glide were not exercised
+in that live session; their classifier branches have deterministic coverage/fallbacks.

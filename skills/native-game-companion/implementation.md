@@ -39,3 +39,14 @@ alone is not a menu detector. Fingerprint AS values plus world position and rela
 to idle after 0.6 seconds without a new observation. Position prevents false expiry
 during constant-speed movement. A perfectly static battle stance may conservatively
 relax to idle too; do not describe this fallback as exact menu detection.
+
+The final inventory test held forward, opened inventory, and observed the old speed
+5.555 remaining in AS while the pet returned to idle. Closing inventory and moving
+again restored run. Stand/run/jump/fall/land/bow and this stale-state sequence were
+verified in a muted copied save. Swimming/riding/gliding were not live exercised.
+
+When launching the native binary directly, preserve the launcher's
+`TOTK_ROMFS_PROOF_DIR` outside the app. Otherwise the runtime may write
+`.romfs-verified-v1` into sealed Resources and break `codesign --verify --strict`.
+Remove only the test-created cache after stopping that test; do not re-sign unrelated
+changes or remove unknown resources to hide signature errors.
