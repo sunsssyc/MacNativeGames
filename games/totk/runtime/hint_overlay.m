@@ -217,9 +217,41 @@ static NSFont *hintFont(CGFloat size){return [NSFont fontWithName:@"PingFangSC-R
 -(void)guide:(id)sender;
 @end
 static TOTKHintActions *hintActions;
+static NSRect hintConversationPlace(NSRect proposed){
+ NSRect safe=NSInsetRect([hintGame convertRectToScreen:hintGame.contentView.bounds],12,12);
+ NSRect character=[hintDock convertRectToScreen:hintAvatar.frame];
+ // Respect deliberate panel placement unless it would cover the character.
+ if(hintPanelPlaced&&!NSIntersectsRect(NSInsetRect(character,-8,-8),proposed))return proposed;
+ CGFloat left=NSMinX(character)-12-proposed.size.width;
+ CGFloat right=NSMaxX(character)+12;
+ if(left>=NSMinX(safe))proposed.origin.x=left;
+ else if(right+proposed.size.width<=NSMaxX(safe))proposed.origin.x=right;
+ else{
+  // A very narrow window uses the space above/below the character.
+  CGFloat room=MAX(NSMaxY(safe)-NSMaxY(character),NSMinY(character)-NSMinY(safe))-12;
+  if(room>=HINT_MIN_H){
+   proposed.size.height=MIN(proposed.size.height,room);
+   proposed.origin.x=NSMidX(character)-proposed.size.width/2;
+   proposed.origin.y=NSMaxY(safe)-NSMaxY(character)>=NSMinY(character)-NSMinY(safe)?NSMaxY(character)+12:NSMinY(character)-12-proposed.size.height;
+  }else{
+   // If neither side nor vertical stack fits, reserve a side rail temporarily.
+   // Do not overwrite the player's saved dock position; closing restores it.
+   character.origin.x=NSMaxX(safe)-character.size.width;
+   [hintDock setFrameOrigin:character.origin];
+   proposed.origin=NSMakePoint(NSMinX(character)-12-proposed.size.width,NSMidY(character)-proposed.size.height/2);
+  }
+ }
+ if(left>=NSMinX(safe)||right+proposed.size.width<=NSMaxX(safe))proposed.origin.y=NSMidY(character)-proposed.size.height/2;
+ proposed.origin.x=MAX(NSMinX(safe),MIN(NSMaxX(safe)-proposed.size.width,proposed.origin.x));
+ proposed.origin.y=MAX(NSMinY(safe),MIN(NSMaxY(safe)-proposed.size.height,proposed.origin.y));
+ return proposed;
+}
 static void hintLayout(CGFloat height){
  (void)height;
- CGFloat w=hintPanelWidth(MIN(380,NSWidth(hintGame.contentView.bounds)-40)),bodyWidth=w-40;   // the player's when set
+ CGFloat w=hintPanelWidth(MIN(380,NSWidth(hintGame.contentView.bounds)-40));   // the player's when set
+ // Leave a character-width rail even when an older preference fills the window.
+ if(hintExpanded)w=MIN(w,MAX(HINT_MIN_W,NSWidth(hintGame.contentView.bounds)-164));
+ CGFloat bodyWidth=w-40;
  hintText.font=hintFont(14);
  NSRect measured=[hintText.stringValue boundingRectWithSize:NSMakeSize(bodyWidth,CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin|NSStringDrawingUsesFontLeading attributes:@{NSFontAttributeName:hintText.font}];
  CGFloat bodyHeight=MAX(52,MAX(ceil(NSHeight(measured))+12,hintHistoryListHeight()));   // 历史's list: its rows
@@ -229,10 +261,19 @@ static void hintLayout(CGFloat height){
  NSRect f=[hintGame convertRectToScreen:hintGame.contentView.bounds];
  CGFloat bottom=MIN(MAX(40,NSHeight(f)*0.18),MAX(20,NSHeight(f)-h-20));
  // The panel sits on the right, or on the left while 指给我看 marks would be under it (hint_scene.inc).
- [hintPanel setFrame:hintPanelPlace(NSMakeRect(hintPanelLeft?NSMinX(f)+24:NSMaxX(f)-w-24,NSMinY(f)+bottom,w,h)) display:NO];
+ hintDockLayout();
+ NSRect placed=hintPanelPlace(NSMakeRect(hintPanelLeft?NSMinX(f)+24:NSMaxX(f)-w-24,NSMinY(f)+bottom,w,h));
+ if(hintExpanded&&!hintPanelLeft)placed=hintConversationPlace(placed);
+ if(hintExpanded&&hintPanelLeft&&NSIntersectsRect(placed,hintDock.frame)){
+  NSPoint origin=hintDock.frame.origin;origin.x=NSMaxX(f)-12-NSWidth(hintDock.frame);
+  [hintDock setFrameOrigin:origin];
+ }
+ h=placed.size.height;
+ [hintPanel setFrame:placed display:NO];
  [hintPanel invalidateCursorRectsForView:hintPanel.contentView];hintPanel.contentView.needsDisplay=YES;
- hintTitle.frame=NSMakeRect(64,h-47,w-148,26);hintTitle.font=hintFont(18);hintTitle.alignment=NSTextAlignmentLeft;
+ hintTitle.frame=NSMakeRect(20,h-47,w-168,26);hintTitle.font=hintFont(18);hintTitle.alignment=NSTextAlignmentLeft;
  hintPortrait.frame=NSMakeRect(20,h-56,36,46);
+ hintPortrait.hidden=YES; // the original full-body companion stays beside the conversation
  hintBack.title=hintWorking?@"取消":@"收起";hintBack.toolTip=@"收起对话 · Esc";
  hintBack.frame=NSMakeRect(w-72,h-46,52,28);
  hintMic.frame=NSMakeRect(w-128,62,48,34);hintMic.title=hintListening?@"停止":@"语音";
@@ -268,7 +309,7 @@ static void hintLayout(CGFloat height){
  hintActionsButton.needsDisplay=YES;
  hintProgress.frame=NSMakeRect(w-98,h-42,16,16);
  if(hintExpanded){[hintGame addChildWindow:hintPanel ordered:NSWindowAbove];[hintPanel orderFront:nil];}
- hintDockLayout();
+ [hintDock orderFront:nil];[(TOTKHintAvatar *)hintAvatar syncMotion];[hintPortrait syncMotion];
 }
 static void hintShow(NSString *text) {
  hintWelcome=NO;hintMic.enabled=!hintWorking;hintRead.enabled=YES;hintQuestion.enabled=!hintWorking;hintSend.enabled=!hintWorking&&!hintListening&&!hintVoiceFinishing&&[[hintQuestion.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] length]>0;((TOTKHintButton *)hintEnable).primary=NO;

@@ -61,6 +61,10 @@ static void hintVoiceMeterLayout(void){
 // Keep this UI preference separate from the assistant service's configuration.
 static BOOL hintDockPositionLoaded, hintDockPositionSet, hintDragging;
 static NSPoint hintDockPosition, hintDragPointer, hintDragOrigin;
+static NSRect hintDockRestFrame; // canonical collapsed frame, also used while only the character is visible
+static NSRect hintDockLastGame;
+static NSPoint hintDockLastPosition;
+static BOOL hintDockLastPositionSet;
 static NSRect hintDockTravel(NSSize size){
  NSRect r=[hintGame convertRectToScreen:hintGame.contentView.bounds];
  return NSMakeRect(NSMinX(r)+12,NSMinY(r)+12,MAX(0,NSWidth(r)-size.width-24),MAX(0,NSHeight(r)-size.height-24));
@@ -75,23 +79,26 @@ static void hintDockLoadPosition(void){
  }
 }
 static void hintDragBegin(NSEvent *event){
- hintDragging=NO;hintDragPointer=[event.window convertPointToScreen:event.locationInWindow];hintDragOrigin=hintDock.frame.origin;
+ hintDragging=NO;hintDragPointer=[event.window convertPointToScreen:event.locationInWindow];
+ NSRect shown=[hintDock convertRectToScreen:hintAvatar.frame];
+ hintDragOrigin=NSMakePoint(NSMaxX(shown)-NSWidth(hintDockRestFrame),NSMidY(shown)-NSHeight(hintDockRestFrame)/2);
 }
 static void hintDragMove(NSEvent *event){
  NSPoint pointer=[event.window convertPointToScreen:event.locationInWindow];
  CGFloat dx=pointer.x-hintDragPointer.x,dy=pointer.y-hintDragPointer.y;
  if(!hintDragging&&hypot(dx,dy)<4)return;
  hintDragging=YES;
- NSRect travel=hintDockTravel(hintDock.frame.size);
+ NSRect travel=hintDockTravel(hintDockRestFrame.size);
  CGFloat x=MAX(NSMinX(travel),MIN(NSMaxX(travel),hintDragOrigin.x+dx));
  CGFloat y=MAX(NSMinY(travel),MIN(NSMaxY(travel),hintDragOrigin.y+dy));
  hintDockPosition=NSMakePoint(travel.size.width?(x-travel.origin.x)/travel.size.width:0,
                              travel.size.height?(y-travel.origin.y)/travel.size.height:0);
- hintDockPositionSet=YES;[hintDock setFrameOrigin:NSMakePoint(x,y)];
+ hintDockPositionSet=YES;
+ if(hintExpanded)hintLayout(0);else hintDockLayout();
 }
 static void hintDragEnd(NSEvent *event){
  (void)event;
- if(!hintDragging){hintOpen();return;}
+ if(!hintDragging){if(hintExpanded)[hintActions close:nil];else hintOpen();return;}
  hintDragging=NO;
  NSData *data=[NSJSONSerialization dataWithJSONObject:@{@"x":@(hintDockPosition.x),@"y":@(hintDockPosition.y)} options:0 error:nil];
  [data writeToFile:hintPath(@"companion-position.json") options:NSDataWritingAtomic error:nil];
@@ -123,11 +130,26 @@ static void hintDockLayout(void){
  NSRect frame=NSMakeRect(NSMaxX(r)-width-24,NSMinY(r)+MAX(156,NSHeight(r)*0.29),width,height);
  NSRect travel=hintDockTravel(frame.size);
  if(hintDockPositionSet)frame.origin=NSMakePoint(travel.origin.x+travel.size.width*hintDockPosition.x,travel.origin.y+travel.size.height*hintDockPosition.y);
+ // Text changes resize the bubble, not the character's screen anchor. A real
+ // drag or window resize still resolves the saved normalized position normally.
+ if(NSWidth(hintDockRestFrame)>0&&NSEqualRects(r,hintDockLastGame)&&
+    hintDockPositionSet==hintDockLastPositionSet&&NSEqualPoints(hintDockPosition,hintDockLastPosition)){
+  frame.origin.x=NSMaxX(hintDockRestFrame)-width;
+  frame.origin.y=NSMidY(hintDockRestFrame)-height/2;
+ }
  frame.origin.x=MAX(NSMinX(travel),MIN(NSMaxX(travel),frame.origin.x));
  frame.origin.y=MAX(NSMinY(travel),MIN(NSMaxY(travel),frame.origin.y));
+ hintDockRestFrame=frame;
+ hintDockLastGame=r;hintDockLastPosition=hintDockPosition;hintDockLastPositionSet=hintDockPositionSet;
+ hintBubbleSurface.hidden=hintExpanded;
+ if(hintExpanded){
+  // Shrink the transparent child window too: an invisible bubble-sized window
+  // would intercept clicks intended for the adjacent conversation panel.
+  frame=NSMakeRect(NSMinX(frame)+width-128,NSMinY(frame)+(height-144)/2,128,144);
+  hintAvatar.frame=NSMakeRect(0,0,128,144);
+ }
  if(!NSEqualRects(frame,hintDock.frame))[hintDock setFrame:frame display:YES];
- if(hintExpanded){if(hintDock.visible)[hintDock orderOut:nil];}
- else if(hintGame.visible&&!hintDock.visible){[hintGame addChildWindow:hintDock ordered:NSWindowAbove];[hintDock orderFront:nil];}
+ if(hintGame.visible){[hintGame addChildWindow:hintDock ordered:NSWindowAbove];[hintDock orderFront:nil];}
  [(TOTKHintAvatar *)hintAvatar syncMotion];
  [hintPortrait syncMotion];
 }

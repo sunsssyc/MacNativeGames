@@ -97,10 +97,34 @@ int main(int argc,const char **argv){@autoreleasepool{
  assert(NSEqualRects(hit,pet.frame));
  assert(![[NSData dataWithContentsOfFile:[@(argv[1]) stringByAppendingPathComponent:@"idle-first.png"]] isEqual:[NSData dataWithContentsOfFile:[@(argv[1]) stringByAppendingPathComponent:@"idle-next.png"]]]);
  [pet syncMotion];assert(pet.motionTimer);
- hintExpanded=YES;[pet syncMotion];assert(!pet.motionTimer);
- [hintPanel orderFront:nil];[hintPortrait syncMotion];assert(hintPortrait.portraitMode&&hintPortrait.motionTimer);
+ hintPanelPlaced=hintPanelSized=NO;hintDockPositionSet=YES;hintDockPosition=NSMakePoint(.8,.5);hintDockLayout();
+ NSRect beforeOpen=[hintDock convertRectToScreen:pet.frame];
+ hintExpanded=YES;hintShowReady();[pet syncMotion];assert(pet.motionTimer);
+ NSRect afterOpen=[hintDock convertRectToScreen:pet.frame];
+ assert(NSEqualRects(beforeOpen,afterOpen));
+ assert(hintDock.visible&&hintBubbleSurface.hidden&&hintPortrait.hidden);
+ assert(!NSIntersectsRect(hintDock.frame,hintPanel.frame));
+ pet.greeting=0;assert([[pet desiredMotion] isEqual:@"listening"]);
+ hintTestSnap(@"/tmp/riju-conversation-preview.png");
+ [hintPanel orderFront:nil];[hintPortrait syncMotion];assert(hintPortrait.portraitMode&&!hintPortrait.motionTimer);
  hintWorking=YES;assert([[hintPortrait desiredMotion] isEqual:@"ponder"]);
  [hintPortrait advanceMotion:2];assert([[hintPortrait desiredMotion] isEqual:@"thinking"]);
  [hintPanel orderOut:nil];[hintPortrait syncMotion];assert(!hintPortrait.motionTimer);
+ hintWorking=NO;hintExpanded=NO;hintDockLayout();
+ assert(NSEqualRects(beforeOpen,[hintDock convertRectToScreen:pet.frame]));
+ assert(!hintBubbleSurface.hidden&&pet.motionTimer);
+ // Centered pets in small windows must not be covered by a minimum-size panel.
+ [w setContentSize:NSMakeSize(640,360)];hintDockPositionSet=YES;hintDockPosition=NSMakePoint(.4,.5);
+ hintDockLayout();NSRect smallRest=[hintDock convertRectToScreen:pet.frame];
+ hintExpanded=YES;hintLayout(0);
+ assert(hintPanel.frame.size.height>=HINT_MIN_H);
+ assert(!NSIntersectsRect(hintDock.frame,hintPanel.frame));
+ hintExpanded=NO;hintDockLayout();assert(NSEqualRects(smallRest,[hintDock convertRectToScreen:pet.frame]));
+ // A saved oversized panel must leave room for the character, including after
+ // scene annotations temporarily move the panel to the left.
+ hintPanelSized=YES;hintPanelSize=NSMakeSize(1200,700);
+ hintExpanded=YES;hintLayout(0);assert(!NSIntersectsRect(hintDock.frame,hintPanel.frame));
+ hintPanelLeft=YES;hintLayout(0);assert(!NSIntersectsRect(hintDock.frame,hintPanel.frame));
+ hintPanelLeft=NO;hintExpanded=NO;hintDockLayout();assert(NSEqualRects(smallRest,[hintDock convertRectToScreen:pet.frame]));
  [hintTimer invalidate];[hintDock orderOut:nil];[w orderOut:nil];puts("pass: 20 skeletal clips, constant-opacity crossfades, gesture scheduling/interruption, speech variants, hover cooldown, stationary hit area, portrait and hidden timer lifecycle");
 }}

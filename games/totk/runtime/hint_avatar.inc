@@ -106,6 +106,7 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  // Enter the held thinking pose before ponder's return-to-idle tail.
  if(hintWorking||hintVoiceFinishing)return self.workingTime<MAX(.1,hintAvatarDuration(@"ponder")-.27)?@"ponder":@"thinking";
  if(self.greeting>0)return self.greetingMotion?:@"greeting";
+ if(hintExpanded)return @"listening"; // stay present with the conversation, not the player's combat
  NSString *activity=hintActivityMotion();
  if([activity isEqual:@"climb"]){self.idleElapsed=0;return @"idle";}
  if(![activity isEqual:@"idle"]){self.idleElapsed=0;return activity;}
@@ -113,7 +114,7 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  return @"idle";
 }
 -(void)syncMotion{
- BOOL active=self.window.visible&&!self.hidden&&(self.portraitMode?hintExpanded:!hintExpanded)&&!NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+ BOOL active=self.window.visible&&!self.hidden&&!NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
  if(!active){[self.motionTimer invalidate];self.motionTimer=nil;self.lastTick=0;self.needsDisplay=YES;return;}
  if(hintDone&&!self.wasDone)[self greetWithMotion:@"welcome"];self.wasDone=hintDone;
  if(self.motionTimer)return;
@@ -121,7 +122,7 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  __weak TOTKHintAvatar *weakSelf=self;
  self.motionTimer=[NSTimer timerWithTimeInterval:1.0/30 repeats:YES block:^(NSTimer *timer){
   TOTKHintAvatar *pet=weakSelf;if(!pet){[timer invalidate];return;}
-  if(!pet.window.visible||pet.hidden||(pet.portraitMode?!hintExpanded:hintExpanded)||NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion){[pet syncMotion];return;}
+  if(!pet.window.visible||pet.hidden||NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion){[pet syncMotion];return;}
   NSTimeInterval now=NSProcessInfo.processInfo.systemUptime,dt=MIN(.1,MAX(0,now-pet.lastTick));pet.lastTick=now;
   [pet advanceMotion:dt];pet.needsDisplay=YES;
  }];[NSRunLoop.mainRunLoop addTimer:self.motionTimer forMode:NSRunLoopCommonModes];

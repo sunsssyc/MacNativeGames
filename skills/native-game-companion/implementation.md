@@ -150,3 +150,20 @@ clip and hold its final ready pose; do not restart it from unchanged observation
 Invalid/inactive actors and explicit command changes still interrupt normally.
 This also bounds movement when an in-game menu freezes the command: one response,
 then a static pose. The regression test holds an identical sample for two seconds.
+
+## Keep the character present during conversation
+
+Opening the conversation keeps the existing full-body dock visible and animated;
+hide the redundant header portrait. Recording/thinking/speaking retain priority,
+and an open conversation uses attentive idle instead of mirroring combat. Stop
+timers based on actual view/window visibility, not the expanded flag alone.
+
+Anchor the panel beside the character and preserve the character's screen position
+when bubble text changes. Keep a canonical collapsed dock frame separate from the
+visible compact window. Hide the bubble and shrink its transparent window to the
+character's rectangle: merely hiding the bubble leaves an invisible window that
+steals clicks from the conversation. Small windows may temporarily reserve a side
+rail; closing restores the saved location. Dragging starts from the visible
+character, including after temporary avoidance. Large saved panel sizes must leave
+room for that rail. AppKit probes check open/close anchor continuity, active body
+versus hidden portrait timers, compact windows, and annotation avoidance.
