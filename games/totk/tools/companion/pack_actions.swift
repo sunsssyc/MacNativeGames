@@ -4,9 +4,10 @@ import ImageIO
 let root=URL(fileURLWithPath:CommandLine.arguments[1])
 let data=try Data(contentsOf:root.appendingPathComponent("manifest.json"))
 let manifest=try JSONSerialization.jsonObject(with:data) as! [String:Any]
-let w=manifest["width"] as! Int,h=manifest["height"] as! Int,cols=manifest["columns"] as! Int
+let baseWidth=manifest["width"] as! Int,h=manifest["height"] as! Int,cols=manifest["columns"] as! Int
 let clips=manifest["clips"] as! [String:[String:Any]]
 for (name,clip) in clips {
+ let w=clip["width"] as? Int ?? baseWidth
  let count=clip["frames"] as! Int,rows=(count+cols-1)/cols
  let ctx=CGContext(data:nil,width:w*cols,height:h*rows,bitsPerComponent:8,bytesPerRow:0,space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
  for i in 0..<count {

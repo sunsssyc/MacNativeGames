@@ -104,3 +104,40 @@ stationary climb samples stayed classified as climb with idle visuals. WallOff
 remained neutral, then Fall/Land/Wait followed correctly. Wait for autoload to
 finish and a valid Wait command before driving the test; Actor presence alone
 is insufficient, and DemoWait can occur during loading.
+
+## Hand-held weapons and attack clips
+
+Riju's actor pack references Weapon_Sword_152_Main/Sub; their ModelInfo points to
+Weapon_Sword_052. Use the local model and its albedo, not a guessed sword ID.
+`attach_weapons.py` imports that model and weights all its vertices rigidly to
+Weapon_L / Weapon_R. The importer has already converted Y-up to Blender Z-up:
+undo that conversion once, then apply the character's rest socket matrix. Do not
+parent at Blender's bone tail. Keep the *_Blade_Hide shape: it is the detachable
+blade visibility group; omitting it leaves only the handle/guard. Weapons use
+half-scale for the mini companion and do not participate in body floor anchoring.
+
+Render armed combat idle, armed Common_Move_Run and a new Combat_Attack clip.
+The broad Combat_Move_Run stance exceeds the fixed dock canvas with swords.
+Combat_Attack removes travelling root/pelvis height and preserves the fixed camera
+and original character size. Armed clips use a wider 256×288 transparent canvas;
+other clips stay 192×288. The fixed 128×144 dock target and shared 256-pixel width
+budget keep apparent scale identical across states. Source rectangles/packing
+use per-clip width; face crops use the original 192-pixel body region. Check every frame with `check_frames.swift`; a
+single ready-pose render misses clipping during overhead swings and wide slashes.
+Do not ship full native arena motion if sword tips are cut off. Weapons are shown
+in these combat clips; social, neutral and airborne clips remain unarmed.
+
+A combat flag is not an attack. Grounded primary sword commands CutS1–CutS4/CutSF,
+CutDash, CutReverse and CutJustRush/Finish select attack immediately. A distinct
+command restarts the strike even if the visual state is still attack. Repeated
+polls of the same command must not reset playback. End the strike immediately
+when the primary command changes to locomotion/stance; equip/charge/face commands
+must not create slashes. Combat_Attack is a compact 24-frame, 30 fps two-sword
+reaction, not an exact retarget of each Link weapon's combo. Other weapon types
+and airborne attacks need separately verified commands and authored visuals.
+
+Validation for the weapon addition: 54 armed frames passed alpha-bound checks
+with a minimum 12 px margin. The pure decoder/classifier test and four AppKit
+regression suites passed, including continuous-command versus new-combo restart.
+Ground attack command routing is checked against Player.root.asb and fixtures;
+new live combat verification remains pending while the user's formal game runs.

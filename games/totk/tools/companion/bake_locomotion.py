@@ -9,6 +9,7 @@ parser.add_argument('--parser',type=Path,required=True,help='Directory containin
 parser.add_argument('--assets',type=Path,required=True,help='Local game-decoded and game-original directories')
 parser.add_argument('--scene',type=Path,required=True,help='Rounded-mouth rig with existing gesture actions')
 parser.add_argument('--output',type=Path,required=True)
+parser.add_argument('--only',help='Bake only these comma-separated native actions')
 args=parser.parse_args(sys.argv[sys.argv.index('--')+1:])
 ROOT=args.assets;OUT=args.output;OUT.mkdir(parents=True,exist_ok=True)
 sys.path.insert(0,str(args.parser))
@@ -44,6 +45,7 @@ bpy.ops.wm.open_mainfile(filepath=str(args.scene))
 scene=bpy.context.scene;arm=next(o for o in scene.objects if o.type=='ARMATURE')
 bones=list(model.skeleton.bones.values());rest={b.name:local(b,None,0) for b in bones}
 selected=['Default_Move_Walk','Common_Move_Run','Combat_Wait','Combat_Move_Run','Jump_St','Jump','Jump_Ed']
+if args.only:selected=args.only.split(',')
 stats=[]
 for name in selected:
  a=clips[name];bamap={b.name:b for b in a.bone_anims}

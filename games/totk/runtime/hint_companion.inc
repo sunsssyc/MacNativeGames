@@ -115,10 +115,11 @@ static void hintDockLayout(void){
  CGFloat need=ceil([hintBubble.cell cellSizeForBounds:NSMakeRect(0,0,textWidth,CGFLOAT_MAX)].height);
  CGFloat textHeight=MIN(sixLines,MAX(36,need));
  CGFloat bubbleWidth=textWidth+36,bubbleHeight=textHeight+24;
- CGFloat height=MAX(144,bubbleHeight+8),width=bubbleWidth+102;
+ CGFloat height=MAX(144,bubbleHeight+8),width=bubbleWidth+134;
  hintBubbleSurface.frame=NSMakeRect(0,(height-bubbleHeight)/2,bubbleWidth,bubbleHeight);
  hintBubble.frame=NSMakeRect(14,12,textWidth,textHeight);
- hintAvatar.frame=NSMakeRect(width-96,(height-144)/2,96,144);
+ // Fixed transparent sword clearance for every state: no attack-time relayout.
+ hintAvatar.frame=NSMakeRect(width-128,(height-144)/2,128,144);
  NSRect frame=NSMakeRect(NSMaxX(r)-width-24,NSMinY(r)+MAX(156,NSHeight(r)*0.29),width,height);
  NSRect travel=hintDockTravel(frame.size);
  if(hintDockPositionSet)frame.origin=NSMakePoint(travel.origin.x+travel.size.width*hintDockPosition.x,travel.origin.y+travel.size.height*hintDockPosition.y);

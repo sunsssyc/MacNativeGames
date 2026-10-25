@@ -108,14 +108,16 @@
       "frames": 20,
       "loop": true,
       "fps": 15,
-      "source_action": "Combat_Wait"
+      "source_action": "Combat_Wait",
+      "width": 256
     },
     "combat_run": {
       "file": "combat_run.png",
       "frames": 10,
       "loop": true,
       "fps": 15,
-      "source_action": "Combat_Move_Run"
+      "source_action": "Common_Move_Run",
+      "width": 256
     },
     "jump": {
       "file": "jump.png",
@@ -137,6 +139,14 @@
       "loop": false,
       "fps": 30,
       "source_action": "Jump_Ed"
+    },
+    "attack": {
+      "file": "attack.png",
+      "frames": 24,
+      "loop": false,
+      "fps": 30,
+      "source_action": "Combat_Attack",
+      "width": 256
     }
   }
 }

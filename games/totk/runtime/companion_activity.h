@@ -1,15 +1,22 @@
 #ifndef TOTK_COMPANION_ACTIVITY_H
 #define TOTK_COMPANION_ACTIVITY_H
 #include "player_activity.h"
-typedef enum { PET_IDLE,PET_WALK,PET_RUN,PET_JUMP,PET_FALL,PET_GLIDE,PET_LAND,PET_COMBAT,PET_COMBAT_RUN,PET_CLIMB } PetActivity;
+typedef enum { PET_IDLE,PET_WALK,PET_RUN,PET_JUMP,PET_FALL,PET_GLIDE,PET_LAND,PET_COMBAT,PET_COMBAT_RUN,PET_CLIMB,PET_ATTACK } PetActivity;
 // Shared with sprite playback: finish the recovery before returning to locomotion.
 #define PET_LAND_SECONDS .20
 typedef struct {
  PetActivity state,pending;double since,last,last_valid,grounded_since,land_until;uint64_t actor,observation;double changed;uint32_t generation;int was_air,falling;
+ double attack_started;char attack_command[64];
 } PetActivityTracker;
 static inline const char *pet_activity_name(PetActivity state){
- const char *names[]={"idle","walk","run","jump","fall","glide","land","combat","combat_run","climb"};
- return state>=PET_IDLE&&state<=PET_CLIMB?names[state]:"idle";
+ const char *names[]={"idle","walk","run","jump","fall","glide","land","combat","combat_run","climb","attack"};
+ return state>=PET_IDLE&&state<=PET_ATTACK?names[state]:"idle";
+}
+static inline int pet_is_ground_attack(const char *action){
+ // Primary Player.root.asb sword commands, not equip/charge/face commands.
+ const char *names[]={"CutS1","CutS2","CutS3","CutS4","CutSF","CutDash","CutReverse","CutJustRush","CutJustFinish"};
+ for(unsigned i=0;i<sizeof names/sizeof names[0];i++)if(!strcmp(action,names[i]))return 1;
+ return 0;
 }
 /* Bounded shared UI sampling. The observation's age is supplied independently of polling time.
    A single failed read gets at most 180 ms grace; paused/old samples reset immediately. */
@@ -35,6 +42,13 @@ static inline PetActivity pet_activity_update(PetActivityTracker *t,const Runtim
  int jump=!strcmp(action,"Jump")||!strcmp(action,"JumpMove");
  int fall=!strcmp(action,"Fall");
  int land=!strncmp(action,"Land",4);
+ if(!a->airborne&&!a->water&&!a->riding&&pet_is_ground_attack(action)){
+  if(t->state!=PET_ATTACK||strcmp(t->attack_command,action)){
+   t->attack_started=now;strcpy(t->attack_command,action);
+  }
+  t->state=t->pending=PET_ATTACK;t->was_air=t->falling=0;
+  t->grounded_since=t->land_until=0;return PET_ATTACK;
+ }
  if(climbing){
   t->state=t->pending=PET_CLIMB;t->was_air=t->falling=0;
   t->grounded_since=t->land_until=0;return PET_CLIMB;
@@ -67,7 +81,7 @@ static inline PetActivity pet_activity_update(PetActivityTracker *t,const Runtim
   desired=now<t->land_until?PET_LAND:(a->combat||a->aiming)?(moving?PET_COMBAT_RUN:PET_COMBAT):moving?(running?PET_RUN:PET_WALK):PET_IDLE;
  }
  if(desired==PET_LAND||desired==PET_JUMP||desired==PET_FALL||desired==PET_GLIDE){t->state=t->pending=desired;t->since=now;}
- else if(t->state==PET_LAND||t->state==PET_CLIMB||(known&&(t->state==PET_JUMP||t->state==PET_FALL))){t->state=t->pending=desired;t->since=now;}
+ else if(t->state==PET_ATTACK||t->state==PET_LAND||t->state==PET_CLIMB||(known&&(t->state==PET_JUMP||t->state==PET_FALL))){t->state=t->pending=desired;t->since=now;}
  else if(desired!=t->pending){t->pending=desired;t->since=now;}
  else if(now-t->since>=.12)t->state=desired;
  return t->state;

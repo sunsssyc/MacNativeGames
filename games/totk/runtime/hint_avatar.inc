@@ -48,6 +48,7 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
 @property BOOL hasGreeted;
 @property NSString *greetingMotion;
 @property NSTimeInterval lastTick,clipStart,transitionStart,transitionDuration;
+@property NSTimeInterval attackStarted;
 @property NSString *motionState;
 @property NSImage *previousSheet;
 @property NSRect previousSource;
@@ -131,6 +132,8 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
 -(NSRect)sourceForState:(NSString *)state time:(NSTimeInterval)time sheet:(NSImage *)sheet{
  NSDictionary *m=hintAvatarManifest(),*clip=m[@"clips"][state];
  NSInteger w=[m[@"width"] integerValue],h=[m[@"height"] integerValue],cols=[m[@"columns"] integerValue];
+ NSInteger bodyWidth=w;
+ if(clip[@"width"])w=[clip[@"width"] integerValue];
  NSInteger count=[clip[@"frames"] integerValue],fps=[clip[@"fps"] integerValue];
  if(w<1||h<1||cols<1||count<1||count>256||fps<1||fps>30||sheet.size.width<cols*w||sheet.size.height<((count+cols-1)/cols)*h)return NSZeroRect;
  double playbackFPS=[state isEqual:@"land"]?count/PET_LAND_SECONDS:fps;
@@ -140,12 +143,12 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  if(NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion)frame=0;
  NSRect r=NSMakeRect((frame%cols)*w,sheet.size.height-(frame/cols+1)*h,w,h);
  // The panel header uses a face crop from the same animated model, not the old illustration.
- if(self.portraitMode){r.origin.x+=w*.22;r.origin.y+=h*.63;r.size=NSMakeSize(w*.56,h*.34);}
+ if(self.portraitMode){r.origin.x+=(w-bodyWidth)*.5+bodyWidth*.22;r.origin.y+=h*.63;r.size=NSMakeSize(bodyWidth*.56,h*.34);}
  return r;
 }
 -(void)drawSheet:(NSImage *)sheet source:(NSRect)source alpha:(CGFloat)alpha operation:(NSCompositingOperation)operation{
  if(NSIsEmptyRect(source))return;
- NSRect area=NSInsetRect(self.bounds,2,2);CGFloat scale=MIN(area.size.width/source.size.width,area.size.height/source.size.height);
+ NSRect area=NSInsetRect(self.bounds,2,2);CGFloat scale=MIN(area.size.width/(self.portraitMode?source.size.width:MAX(256,source.size.width)),area.size.height/source.size.height);
  NSRect target=NSMakeRect(NSMidX(area)-source.size.width*scale/2,NSMidY(area)-source.size.height*scale/2,source.size.width*scale,source.size.height*scale);
  [sheet drawInRect:target fromRect:source operation:operation fraction:alpha respectFlipped:YES hints:@{NSImageHintInterpolation:@(NSImageInterpolationHigh)}];
 }
@@ -162,12 +165,14 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  (void)dirty;NSString *state=[self desiredMotion];NSImage *sheet=hintAvatarSheet(state);
  if(!sheet){state=@"idle";sheet=hintAvatarSheet(state);}
  if(!sheet){if(self.image)[self drawSheet:self.image source:NSMakeRect(0,0,self.image.size.width,self.image.size.height) alpha:1 operation:NSCompositingOperationSourceOver];return;}
- if(![state isEqual:self.motionState]){
+ BOOL newStrike=[state isEqual:@"attack"]&&self.attackStarted!=hintActivityTracker.attack_started;
+ if(![state isEqual:self.motionState]||newStrike){
   self.previousSheet=hintAvatarSheet(self.motionState?:@"idle");
   self.previousSource=[self sourceForState:self.motionState?:@"idle" time:self.motionTime-self.clipStart sheet:self.previousSheet];
-  NSSet *airClips=[NSSet setWithObjects:@"jump",@"fall",@"land",nil];
+  NSSet *airClips=[NSSet setWithObjects:@"jump",@"fall",@"land",@"attack",nil];
   self.transitionDuration=([airClips containsObject:state]||[airClips containsObject:self.motionState?:@""])? .05:.16;
   self.motionState=state;self.clipStart=self.motionTime;self.transitionStart=self.motionTime;
+  self.attackStarted=hintActivityTracker.attack_started;
  }
  CGFloat blend=MIN(1,MAX(0,(self.motionTime-self.transitionStart)/MAX(.01,self.transitionDuration)));
  if(NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion||!self.previousSheet)blend=1;

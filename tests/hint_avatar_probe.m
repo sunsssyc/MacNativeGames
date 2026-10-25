@@ -32,11 +32,12 @@ int main(int argc,const char **argv){@autoreleasepool{
  w.title=@"露珠动作验证";[w orderFront:nil];totk_hint_install(w);hintFolder=@(argv[1]);
  TOTKHintAvatar *pet=(TOTKHintAvatar *)hintAvatar;avatarTransitionProbe(pet);
  assert(hintAvatarManifest()[@"clips"]!=nil);
- assert([hintAvatarManifest()[@"clips"] count]==19);
+ assert([hintAvatarManifest()[@"clips"] count]==20);
  for(NSString *name in hintAvatarManifest()[@"clips"]){
   NSImage *sheet=hintAvatarSheet(name);assert(sheet);
   NSRect first=[pet sourceForState:name time:0 sheet:sheet],last=[pet sourceForState:name time:100 sheet:sheet];
-  assert(first.size.width==192&&first.size.height==288);
+  NSInteger expectedWidth=[hintAvatarManifest()[@"clips"][name][@"width"] integerValue]?:192;
+  assert(first.size.width==expectedWidth&&first.size.height==288);
   assert(NSContainsRect(NSMakeRect(0,0,sheet.size.width,sheet.size.height),first));
   assert(NSContainsRect(NSMakeRect(0,0,sheet.size.width,sheet.size.height),last));
  }
@@ -51,6 +52,17 @@ int main(int argc,const char **argv){@autoreleasepool{
  hintActivityTracker=(PetActivityTracker){.state=PET_RUN,.pending=PET_RUN,.actor=1,.last=NSProcessInfo.processInfo.systemUptime,.changed=NSProcessInfo.processInfo.systemUptime};hintActivityPoll=hintActivityTracker.last;
  assert([[pet desiredMotion] isEqual:@"run"]);
  hintListening=YES;assert([[pet desiredMotion] isEqual:@"listening"]);hintListening=NO;
+ // Combo command changes restart the same attack sheet; repeated samples do not.
+ hintActivityTracker.state=PET_ATTACK;hintActivityTracker.attack_started=1;
+ hintActivityPoll=NSProcessInfo.processInfo.systemUptime;
+ avatarCapture(pet,[@(argv[1]) stringByAppendingPathComponent:@"attack-first.png"]);
+ assert([pet.motionState isEqual:@"attack"]);NSTimeInterval firstStrike=pet.clipStart;
+ pet.motionTime+=.2;hintActivityPoll=NSProcessInfo.processInfo.systemUptime;
+ avatarCapture(pet,[@(argv[1]) stringByAppendingPathComponent:@"attack-next.png"]);
+ assert(pet.clipStart==firstStrike);
+ hintActivityTracker.attack_started=2;hintActivityPoll=NSProcessInfo.processInfo.systemUptime;
+ avatarCapture(pet,[@(argv[1]) stringByAppendingPathComponent:@"attack-combo.png"]);
+ assert(pet.clipStart==pet.motionTime&&pet.clipStart>firstStrike);
  fakeActivity=(RuntimePlayerActivity){0};hintActivityTracker=(PetActivityTracker){0};hintActivityPoll=0;
  hintRecording=YES;assert([[pet desiredMotion] isEqual:@"listening"]);hintRecording=NO;
  hintWorking=YES;assert([[pet desiredMotion] isEqual:@"ponder"]);
@@ -90,5 +102,5 @@ int main(int argc,const char **argv){@autoreleasepool{
  hintWorking=YES;assert([[hintPortrait desiredMotion] isEqual:@"ponder"]);
  [hintPortrait advanceMotion:2];assert([[hintPortrait desiredMotion] isEqual:@"thinking"]);
  [hintPanel orderOut:nil];[hintPortrait syncMotion];assert(!hintPortrait.motionTimer);
- [hintTimer invalidate];[hintDock orderOut:nil];[w orderOut:nil];puts("pass: 19 skeletal clips, constant-opacity crossfades, gesture scheduling/interruption, speech variants, hover cooldown, stationary hit area, portrait and hidden timer lifecycle");
+ [hintTimer invalidate];[hintDock orderOut:nil];[w orderOut:nil];puts("pass: 20 skeletal clips, constant-opacity crossfades, gesture scheduling/interruption, speech variants, hover cooldown, stationary hit area, portrait and hidden timer lifecycle");
 }}

@@ -82,5 +82,15 @@ int main(void){
  strcpy(a.action,"ClimbMove");assert(STEP(.033)==PET_CLIMB);
  strcpy(a.action,"Wait");a.airborne=0;a.speed=0;assert(STEP(.033)==PET_IDLE); // no fake landing
  strcpy(a.action,"UnknownAirAction");a.airborne=1;a.velocity[1]=-3;assert(STEP(.033)==PET_IDLE);
+ // Grounded sword combos trigger once per command and stop immediately.
+ a.airborne=0;a.combat=1;strcpy(a.action,"CutS1");assert(STEP(.033)==PET_ATTACK);
+ double strike=t.attack_started;assert(STEP(.033)==PET_ATTACK&&t.attack_started==strike);
+ strcpy(a.action,"CutS2");assert(STEP(.033)==PET_ATTACK&&t.attack_started>strike);
+ strcpy(a.action,"Wait");assert(STEP(.033)==PET_COMBAT);
+ strcpy(a.action,"WeaponEquipOn");assert(STEP(.033)==PET_COMBAT);
+ strcpy(a.action,"ChargeWait");assert(STEP(.033)==PET_COMBAT);
+ strcpy(a.action,"CutS1");a.airborne=1;assert(STEP(.033)==PET_IDLE);
+ a.airborne=0;assert(STEP(.033)==PET_ATTACK);
+ a.active=0;assert(STEP(.033)==PET_IDLE);
  puts("PASS: guarded layout, invalid reads, hysteresis, jump/land, combat, pause, stale data and actor replacement");
 }
