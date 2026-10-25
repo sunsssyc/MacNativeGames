@@ -58,5 +58,19 @@ int main(void){
  a.airborne=0;STEP(.1);a.airborne=1;a.velocity[1]=4;assert(STEP(.1)==PET_JUMP);
  a.airborne=0;assert(STEP(.1)==PET_JUMP);assert(STEP(.1)==PET_LAND);
  a.active=0;assert(STEP(.01)==PET_IDLE);
+ // Captured wall-hang observation: InAir=1, vy=0.000033; changing observations
+ // must not keep a free-fall pose forever. Do not call this a climb detector.
+ a.active=1;a.airborne=1;a.velocity[1]=.000033f;a.speed=.0017f;
+ assert(STEP(.1)==PET_FALL);assert(STEP(.1)==PET_FALL);
+ assert(STEP(.1)==PET_FALL);STEP(.1);assert(STEP(.1)==PET_IDLE);
+ assert(STEP(.1)==PET_IDLE);
+ a.airborne=0;assert(STEP(.1)==PET_IDLE); // no fabricated landing on wall exit
+ a.airborne=1;a.velocity[1]=.000033f;STEP(.1);STEP(.2);STEP(.2);
+ a.velocity[1]=-2;assert(STEP(.1)==PET_FALL); // letting go resumes falling
+ a.velocity[1]=0;a.gliding=1;
+ for(int i=0;i<8;i++)assert(STEP(.1)==PET_GLIDE);
+ t=(PetActivityTracker){0};a.gliding=0;a.velocity[1]=3;
+ assert(STEP(.1)==PET_JUMP);a.velocity[1]=0;
+ assert(STEP(.1)==PET_JUMP);assert(STEP(.1)==PET_JUMP); // brief apex is preserved
  puts("PASS: guarded layout, invalid reads, hysteresis, jump/land, combat, pause, stale data and actor replacement");
 }

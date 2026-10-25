@@ -75,3 +75,15 @@ at landing boundaries. Keep two-sample contact confirmation and immediate airbor
 interrupts. Tests cover landing to idle/run, rapid re-jumping, and reaching the last
 recovery sprite before the interval expires. These checks validate timing, not a
 claim that sprite crossfades are continuous skeletal blending.
+
+## InAir also covers wall hanging
+
+A read-only sample of the user's wall-hanging session returned InAir=1,
+speed_xz=0.001749 and vertical_velocity=0.0000333. Do not interpret InAir as
+proof of free fall. Until a version-verified climbing action reader is available,
+use neutral idle after 350 ms with |vy| < 0.1 (except explicit gliding), and do
+not invent a landing when that neutral state ends. Resume falling immediately
+when vertical motion returns. This only handles sustained vertical stillness;
+it does not identify moving climbs, ladders or wall jumps. Do not claim climbing
+support from this fallback. Tests include the observed values, changing sample
+fingerprints, release into falling, a short apex and explicit gliding.

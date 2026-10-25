@@ -5,7 +5,7 @@ typedef enum { PET_IDLE,PET_WALK,PET_RUN,PET_JUMP,PET_FALL,PET_GLIDE,PET_LAND,PE
 // Shared with sprite playback: finish the recovery before returning to locomotion.
 #define PET_LAND_SECONDS .30
 typedef struct {
- PetActivity state,pending;double since,last,last_valid,grounded_since,land_until;uint64_t actor,observation;double changed;uint32_t generation;int was_air,falling;
+ PetActivity state,pending;double since,last,last_valid,grounded_since,land_until,air_still_since;uint64_t actor,observation;double changed;uint32_t generation;int was_air,falling;
 } PetActivityTracker;
 static inline const char *pet_activity_name(PetActivity state){
  const char *names[]={"idle","walk","run","jump","fall","glide","land","combat","combat_run"};
@@ -29,14 +29,25 @@ static inline PetActivity pet_activity_update(PetActivityTracker *t,const Runtim
  // Stop reacting if the whole AS sample plus position has stopped changing.
  if(now-t->changed>.6){t->state=t->pending=PET_IDLE;t->was_air=0;t->land_until=0;return PET_IDLE;}
  PetActivity desired=PET_IDLE;
- if(a->water||a->riding){t->was_air=t->falling=0;t->grounded_since=t->land_until=0;}
+ if(a->water||a->riding){t->was_air=t->falling=0;t->grounded_since=t->land_until=t->air_still_since=0;}
  else if(a->airborne||a->gliding){
+  // InAir is also true while hanging on a wall. A sustained near-zero vertical
+  // speed cannot justify a free-fall pose. This is a neutral fallback, NOT a
+  // climbing detector; brief jump apexes and explicit gliding keep their pose.
+  if(!a->gliding&&fabsf(a->velocity[1])<.1f){
+   if(!t->air_still_since)t->air_still_since=now;
+   if(now-t->air_still_since>=.35){
+    t->state=t->pending=PET_IDLE;t->was_air=t->falling=0;
+    t->grounded_since=t->land_until=0;return PET_IDLE;
+   }
+  }else t->air_still_since=0;
   // One-way apex: noise around zero must not restart jump/fall clips.
   if(!t->was_air)t->falling=a->velocity[1]<=.5;
   else if(a->velocity[1]<-.5)t->falling=1;
   desired=a->gliding?PET_GLIDE:t->falling?PET_FALL:PET_JUMP;
   t->was_air=1;t->grounded_since=t->land_until=0;
  }else{
+  t->air_still_since=0;
   if(t->was_air){
    if(!t->grounded_since)t->grounded_since=now;
    if(now-t->grounded_since<.08)return t->state; // confirm contact across two samples
