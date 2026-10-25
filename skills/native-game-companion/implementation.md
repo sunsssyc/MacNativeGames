@@ -50,3 +50,17 @@ When launching the native binary directly, preserve the launcher's
 `.romfs-verified-v1` into sealed Resources and break `codesign --verify --strict`.
 Remove only the test-created cache after stopping that test; do not re-sign unrelated
 changes or remove unknown resources to hide signature errors.
+
+## Jump flicker correction
+
+Do not crossfade two sprites with two ordinary source-over draws: at 50/50,
+opaque overlap has only 75% alpha and the game background flashes through.
+Blend premultiplied colors additively inside an isolated transparent layer, then
+composite that layer once. Test opaque overlap at 0/25/50/75/100% against both
+transparent and colored backgrounds; the avatar probe covers this.
+
+Latch rising→falling for one airborne interval instead of switching on every
+near-zero vertical-speed sample. Confirm ground contact across two samples before
+landing. A single failed guarded read can hold the previous visual state for at
+most 180 ms; explicit paused state, stale samples and identity changes still reset.
+Tests inject apex jitter, a one-sample false landing and brief/long read failures.

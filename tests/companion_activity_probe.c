@@ -25,7 +25,7 @@ int main(void){
  a.speed=5;STEP(.1);assert(STEP(.15)==PET_RUN);a.speed=3.5;assert(STEP(.1)==PET_RUN);
  a.airborne=1;a.velocity[1]=3;assert(STEP(.1)==PET_JUMP);
  a.velocity[1]=-2;assert(STEP(.1)==PET_FALL);a.gliding=1;assert(STEP(.1)==PET_GLIDE);
- a.gliding=a.airborne=0;a.speed=0;assert(STEP(.1)==PET_LAND);
+ a.gliding=a.airborne=0;a.speed=0;assert(STEP(.1)==PET_GLIDE);assert(STEP(.1)==PET_LAND);
  STEP(.25);STEP(.25);assert(STEP(.15)==PET_IDLE);
  a.combat=1;STEP(.1);assert(STEP(.15)==PET_COMBAT);
  a.speed=4;STEP(.1);assert(STEP(.15)==PET_COMBAT_RUN);
@@ -37,5 +37,17 @@ int main(void){
  now+=.2;assert(pet_activity_update(&t,&a,now,now)==PET_COMBAT_RUN);
  now+=.5;assert(pet_activity_update(&t,&a,now,now)==PET_IDLE);
  a.observation++;STEP(.1);assert(STEP(.15)==PET_COMBAT_RUN);
+ // Apex jitter and one false contact cannot alternate jump/fall/land every sample.
+ t=(PetActivityTracker){0};a.combat=0;a.speed=0;a.airborne=1;a.velocity[1]=3;
+ assert(STEP(.1)==PET_JUMP);
+ for(int i=0;i<6;i++){a.velocity[1]=i%2?.2:-.2;assert(STEP(.1)==PET_JUMP);}
+ a.velocity[1]=-2;assert(STEP(.1)==PET_FALL);
+ a.velocity[1]=.3;assert(STEP(.1)==PET_FALL);
+ a.airborne=0;assert(STEP(.1)==PET_FALL);
+ a.airborne=1;assert(STEP(.1)==PET_FALL);
+ a.valid=0;assert(STEP(.1)==PET_FALL);assert(STEP(.1)==PET_IDLE);a.valid=1;
+ a.airborne=0;STEP(.1);a.airborne=1;a.velocity[1]=4;assert(STEP(.1)==PET_JUMP);
+ a.airborne=0;assert(STEP(.1)==PET_JUMP);assert(STEP(.1)==PET_LAND);
+ a.active=0;assert(STEP(.01)==PET_IDLE);
  puts("PASS: guarded layout, invalid reads, hysteresis, jump/land, combat, pause, stale data and actor replacement");
 }

@@ -140,16 +140,25 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  if(self.portraitMode){r.origin.x+=w*.22;r.origin.y+=h*.63;r.size=NSMakeSize(w*.56,h*.34);}
  return r;
 }
--(void)drawSheet:(NSImage *)sheet source:(NSRect)source alpha:(CGFloat)alpha{
+-(void)drawSheet:(NSImage *)sheet source:(NSRect)source alpha:(CGFloat)alpha operation:(NSCompositingOperation)operation{
  if(NSIsEmptyRect(source))return;
  NSRect area=NSInsetRect(self.bounds,2,2);CGFloat scale=MIN(area.size.width/source.size.width,area.size.height/source.size.height);
  NSRect target=NSMakeRect(NSMidX(area)-source.size.width*scale/2,NSMidY(area)-source.size.height*scale/2,source.size.width*scale,source.size.height*scale);
- [sheet drawInRect:target fromRect:source operation:NSCompositingOperationSourceOver fraction:alpha respectFlipped:YES hints:@{NSImageHintInterpolation:@(NSImageInterpolationHigh)}];
+ [sheet drawInRect:target fromRect:source operation:operation fraction:alpha respectFlipped:YES hints:@{NSImageHintInterpolation:@(NSImageInterpolationHigh)}];
+}
+// Weighted premultiplied colors must be added in an isolated transparent layer.
+// Two source-over draws at 50% only produce 75% alpha, making the pet flash translucent.
+-(void)drawTransitionFrom:(NSImage *)old source:(NSRect)oldSource to:(NSImage *)next source:(NSRect)nextSource blend:(CGFloat)blend{
+ CGContextRef context=NSGraphicsContext.currentContext.CGContext;
+ CGContextSaveGState(context);CGContextBeginTransparencyLayer(context,NULL);
+ [self drawSheet:old source:oldSource alpha:1-blend operation:NSCompositingOperationSourceOver];
+ [self drawSheet:next source:nextSource alpha:blend operation:NSCompositingOperationPlusLighter];
+ CGContextEndTransparencyLayer(context);CGContextRestoreGState(context);
 }
 -(void)drawRect:(NSRect)dirty{
  (void)dirty;NSString *state=[self desiredMotion];NSImage *sheet=hintAvatarSheet(state);
  if(!sheet){state=@"idle";sheet=hintAvatarSheet(state);}
- if(!sheet){if(self.image)[self drawSheet:self.image source:NSMakeRect(0,0,self.image.size.width,self.image.size.height) alpha:1];return;}
+ if(!sheet){if(self.image)[self drawSheet:self.image source:NSMakeRect(0,0,self.image.size.width,self.image.size.height) alpha:1 operation:NSCompositingOperationSourceOver];return;}
  if(![state isEqual:self.motionState]){
   self.previousSheet=hintAvatarSheet(self.motionState?:@"idle");
   self.previousSource=[self sourceForState:self.motionState?:@"idle" time:self.motionTime-self.clipStart sheet:self.previousSheet];
@@ -157,7 +166,8 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  }
  CGFloat blend=MIN(1,MAX(0,(self.motionTime-self.transitionStart)/.16));
  if(NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion||!self.previousSheet)blend=1;
- if(blend<1)[self drawSheet:self.previousSheet source:self.previousSource alpha:1-blend];else self.previousSheet=nil;
- [self drawSheet:sheet source:[self sourceForState:state time:self.motionTime-self.clipStart sheet:sheet] alpha:blend];
+ NSRect source=[self sourceForState:state time:self.motionTime-self.clipStart sheet:sheet];
+ if(blend<1)[self drawTransitionFrom:self.previousSheet source:self.previousSource to:sheet source:source blend:blend];
+ else{self.previousSheet=nil;[self drawSheet:sheet source:source alpha:1 operation:NSCompositingOperationSourceOver];}
 }
 @end

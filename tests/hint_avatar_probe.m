@@ -9,11 +9,28 @@ static void avatarCapture(TOTKHintAvatar *pet,NSString *path){
  [pet cacheDisplayInRect:pet.bounds toBitmapImageRep:rep];
  [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
 }
+static void avatarTransitionProbe(TOTKHintAvatar *pet){
+ NSRect saved=pet.frame;pet.frame=NSMakeRect(0,0,64,64);
+ NSImage *(^solid)(NSColor *)=^NSImage *(NSColor *color){
+  return [NSImage imageWithSize:NSMakeSize(32,32) flipped:NO drawingHandler:^BOOL(NSRect rect){[color setFill];NSRectFill(rect);return YES;}];
+ };
+ NSImage *red=solid(NSColor.redColor),*blue=solid(NSColor.blueColor);
+ for(int background=0;background<2;background++)for(int step=0;step<=4;step++){
+  NSBitmapImageRep *rep=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:64 pixelsHigh:64 bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+  [NSGraphicsContext saveGraphicsState];[NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
+  if(background){[NSColor.greenColor setFill];NSRectFill(NSMakeRect(0,0,64,64));}
+  [pet drawTransitionFrom:red source:NSMakeRect(0,0,32,32) to:blue source:NSMakeRect(0,0,32,32) blend:step/4.0];
+  [NSGraphicsContext restoreGraphicsState];
+  NSColor *c=[[rep colorAtX:32 y:32] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+  assert(c.alphaComponent>.98);assert(c.greenComponent<.02); // no 75% opacity dip or game-background leak
+ }
+ pet.frame=saved;
+}
 int main(int argc,const char **argv){@autoreleasepool{
  assert(argc==2);[NSApplication sharedApplication];
  NSWindow *w=[[NSWindow alloc] initWithContentRect:NSMakeRect(160,180,1000,680) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
  w.title=@"露珠动作验证";[w orderFront:nil];totk_hint_install(w);hintFolder=@(argv[1]);
- TOTKHintAvatar *pet=(TOTKHintAvatar *)hintAvatar;
+ TOTKHintAvatar *pet=(TOTKHintAvatar *)hintAvatar;avatarTransitionProbe(pet);
  assert(hintAvatarManifest()[@"clips"]!=nil);
  assert([hintAvatarManifest()[@"clips"] count]==19);
  for(NSString *name in hintAvatarManifest()[@"clips"]){
@@ -68,5 +85,5 @@ int main(int argc,const char **argv){@autoreleasepool{
  hintWorking=YES;assert([[hintPortrait desiredMotion] isEqual:@"ponder"]);
  [hintPortrait advanceMotion:2];assert([[hintPortrait desiredMotion] isEqual:@"thinking"]);
  [hintPanel orderOut:nil];[hintPortrait syncMotion];assert(!hintPortrait.motionTimer);
- [hintTimer invalidate];[hintDock orderOut:nil];[w orderOut:nil];puts("pass: 12 skeletal clips, gesture scheduling/interruption, speech variants, hover cooldown, stationary hit area, portrait and hidden timer lifecycle");
+ [hintTimer invalidate];[hintDock orderOut:nil];[w orderOut:nil];puts("pass: 19 skeletal clips, constant-opacity crossfades, gesture scheduling/interruption, speech variants, hover cooldown, stationary hit area, portrait and hidden timer lifecycle");
 }}
