@@ -13,7 +13,7 @@ Use the game's animation blackboard or another verified live state source. A hel
 
 Version-gate memory layouts. Read through guarded memory copies, validate chain ownership, array counts, finite values and actor identity before publishing a sample. Reset on unload, identity change or stale data. Unknown means quiet idle; do not substitute stale movement. Do not invoke guest virtual functions from the AppKit thread.
 
-Keep sampling bounded and local. The resident player list is appropriate; a full nearby-actor scan, model call or screenshot per animation frame is not. Use one shared sample for portrait and dock. Give recording, speaking and dragging priority over gameplay reactions. Hysteresis prevents walk/run flicker; landing is an edge-triggered one-shot. A combat stance flag does not prove an enemy is nearby or an attack occurred.
+Keep sampling bounded and local. The resident player list is appropriate; a full nearby-actor scan, model call or screenshot per animation frame is not. Use one shared sample for portrait and dock. Give recording, speaking and dragging priority over gameplay reactions. Prefer a guarded primary animation command over InAir alone: InAir is also true while climbing. Hysteresis prevents walk/run flicker; do not add a fixed hold after an authoritative landing command has ended. A combat stance flag does not prove an enemy is nearby or an attack occurred.
 
 ## Skeletal animation and rendering
 

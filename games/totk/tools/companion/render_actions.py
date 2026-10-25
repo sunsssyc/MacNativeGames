@@ -18,9 +18,9 @@ clips={
  'run':('Common_Move_Run',10,20,True),
  'combat':('Combat_Wait',20,40,True),
  'combat_run':('Combat_Move_Run',10,20,True),
- 'jump':('Jump',9,18,False),
- 'fall':('Jump',12,0,True),
- 'land':('Jump_Ed',8,15,False),
+ 'jump':('Jump_St',6,4,False),
+ 'fall':('Jump_Ed',6,4,False),
+ 'land':('Jump_Ed',8,11,False),
  'idle':('Default_Wait',25,50,True),
  'greeting':('Default_Joy_Hello',18,36,False),
  'fidget':('Default_Wait_Random',128,255,False),
@@ -58,8 +58,14 @@ for name,(action,count,duration,loop) in clips.items():
  folder=OUT/name;folder.mkdir(exist_ok=True)
  first=pose(action,1)
  for i in range(count):
-  f=9 if name=='fall' else 1+duration*i/count
+  f=1+duration*i/count
+  if name=='jump':f=1+4*min(1,i/3)
+  if name=='fall':f=1+i/(count-1)
+  if name=='land':f=2+14*i/(count-1)
   matrices=pose(action,f)
+  if name=='jump' and i>=3:
+   target=pose('Jump',1)
+   matrices={n:mix(m,target[n],smooth((i-3)/2)) for n,m in matrices.items()}
   if name in ('walk','run','combat_run'):
    matrices['Root']=idle['Root'].copy()  # Remove travel; retain the authored limb cycle.
   # Original loops are eased into the first pose over their final four samples.
@@ -68,7 +74,7 @@ for name,(action,count,duration,loop) in clips.items():
    matrices={n:mix(m,first[n],amount) for n,m in matrices.items()}
   # One-shot gestures depart from and return to the same idle pose. A 4-frame
   # ramp is enough for the lightweight dock without snapping arms at boundaries.
-  if not loop and name not in ('jump','land'):
+  if not loop and name not in ('jump','fall','land'):
    strength=smooth(min(1,i/4,(count-1-i)/4))
    matrices={n:mix(idle[n],m,strength) for n,m in matrices.items()}
   arm.animation_data.action=None
@@ -77,7 +83,7 @@ for name,(action,count,duration,loop) in clips.items():
   if name in ('walk','run','combat','combat_run','land'):
    arm.location.z+=max(0,base_floor-mesh_floor());bpy.context.view_layer.update()
   s.render.filepath=str(folder/f'{i:03d}.png');bpy.ops.render.render(write_still=True)
- manifest['clips'][name]={'file':name+'.png','frames':count,'loop':loop,'fps':15,'source_action':action}
+ manifest['clips'][name]={'file':name+'.png','frames':count,'loop':loop,'fps':30 if name in ('jump','fall','land') else 15,'source_action':action}
  (OUT/'manifest.json').write_text(json.dumps(manifest,indent=2))
  print('CLIP_DONE',name,count,flush=True)
 print('COMPANION_ACTIONS_DONE',sum(v[1] for v in clips.values()),flush=True)

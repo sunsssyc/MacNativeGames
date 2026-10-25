@@ -27,7 +27,7 @@ static NSDictionary *hintRuntimeState(void){
  @"assistant_paused":@(hintPauseHeld),@"action_active":@(hintRuntimeActive()),@"health":[NSNull null],@"quests":[NSNull null]} mutableCopy];
  RuntimePlayerActivity activity={0};
  if(runtime_live_activity&&runtime_live_activity(&activity)&&activity.valid){
-  s[@"player_activity"]=@{@"source":@"player_animation_blackboard",@"active":@(activity.active),
+  s[@"player_activity"]=@{@"source":@"player_animation_blackboard",@"action":@(activity.action),@"active":@(activity.active),
    @"speed_xz":@(activity.speed),@"vertical_velocity":@(activity.velocity[1]),@"airborne":@(activity.airborne),
    @"in_water":@(activity.water),@"combat_stance":@(activity.combat),@"aiming":@(activity.aiming),@"gliding":@(activity.gliding),@"standing_ride":@(activity.riding)};
  }

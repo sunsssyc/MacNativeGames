@@ -2,17 +2,18 @@
 extern int runtime_live_activity(RuntimePlayerActivity *out) __attribute__((weak_import));
 // Transparent frames rendered from the skinned Riju model; no per-frame 3D renderer in the game.
 // All frames share a camera/foot anchor, so animation never moves the click target or saved dock position.
-// A shared, bounded 10 Hz read for dock and portrait. No model calls, screenshots or actor-table scan.
+// A shared, bounded 30 Hz read for dock and portrait. No model calls, screenshots or actor-table scan.
 static PetActivityTracker hintActivityTracker;
 static NSTimeInterval hintActivityPoll;
 static NSString *hintActivityMotion(void){
  NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;
- if(now-hintActivityPoll>=.1){
+ if(now-hintActivityPoll>=1.0/30){
   RuntimePlayerActivity a={0};if(runtime_live_activity)runtime_live_activity(&a);
   pet_activity_update(&hintActivityTracker,&a,now,now);hintActivityPoll=now;
  }
  PetActivity state=hintActivityTracker.state;
  // The airborne pose also covers gliding until a dedicated parasail clip is authored.
+ if(state==PET_CLIMB)return @"climb"; // stable neutral visual until a matching climb clip exists
  return state==PET_GLIDE?@"fall":@(pet_activity_name(state));
 }
 static BOOL hintAvatarIsSpeaking(void);
@@ -105,6 +106,7 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  if(hintWorking||hintVoiceFinishing)return self.workingTime<MAX(.1,hintAvatarDuration(@"ponder")-.27)?@"ponder":@"thinking";
  if(self.greeting>0)return self.greetingMotion?:@"greeting";
  NSString *activity=hintActivityMotion();
+ if([activity isEqual:@"climb"]){self.idleElapsed=0;return @"idle";}
  if(![activity isEqual:@"idle"]){self.idleElapsed=0;return activity;}
  if(self.idleElapsed>=[self idleDelay])return [self idleGesture];
  return @"idle";
@@ -163,7 +165,8 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  if(![state isEqual:self.motionState]){
   self.previousSheet=hintAvatarSheet(self.motionState?:@"idle");
   self.previousSource=[self sourceForState:self.motionState?:@"idle" time:self.motionTime-self.clipStart sheet:self.previousSheet];
-  self.transitionDuration=([state isEqual:@"land"]||[self.motionState isEqual:@"land"])? .08:.16;
+  NSSet *airClips=[NSSet setWithObjects:@"jump",@"fall",@"land",nil];
+  self.transitionDuration=([airClips containsObject:state]||[airClips containsObject:self.motionState?:@""])? .05:.16;
   self.motionState=state;self.clipStart=self.motionTime;self.transitionStart=self.motionTime;
  }
  CGFloat blend=MIN(1,MAX(0,(self.motionTime-self.transitionStart)/MAX(.01,self.transitionDuration)));

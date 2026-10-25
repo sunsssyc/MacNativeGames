@@ -65,25 +65,42 @@ landing. A single failed guarded read can hold the previous visual state for at
 most 180 ms; explicit paused state, stale samples and identity changes still reset.
 Tests inject apex jitter, a one-sample false landing and brief/long read failures.
 
-## Landing recovery timing
+## Primary animation commands and airborne playback (supersedes velocity fallback)
 
-Use one duration for the state machine and sprite playback (`PET_LAND_SECONDS`,
-0.30 seconds). Landing exit bypasses ordinary locomotion debounce: adding that
-delay after a fixed landing hold made the character appear to wait before running.
-Play all eight recovery frames within that interval and use an 80 ms transition
-at landing boundaries. Keep two-sample contact confirmation and immediate airborne
-interrupts. Tests cover landing to idle/run, rapid re-jumping, and reaching the last
-recovery sprite before the interval expires. These checks validate timing, not a
-claim that sprite crossfades are continuous skeletal blending.
+Do not identify climbing or free fall from InAir/vertical velocity alone. The
+previous 350 ms stationary-air fallback failed while climbing moved. In a muted
+private 1.4.3 session the primary AS graph command reads Wait, Move, Jump, Land,
+ClimbMove, ClimbWait, WallOff and Fall as the corresponding actions happen.
 
-## InAir also covers wall hanging
+Verified chain after the existing AS controller/blackboard checks:
+- Controller +0x18: slot count 7; +0x20: inline slot buffer pointer.
+- First slot +0: primary graph instance.
+- Instance +0x10: current command string; +0x28: owning blackboard;
+  +0x90: owning controller. Validate both backlinks and bounded ASCII name.
+- Re-read the slot instance and command pointer, actor generation/state and
+  controller/blackboard ownership before publishing. Failure stays invalid.
 
-A read-only sample of the user's wall-hanging session returned InAir=1,
-speed_xz=0.001749 and vertical_velocity=0.0000333. Do not interpret InAir as
-proof of free fall. Until a version-verified climbing action reader is available,
-use neutral idle after 350 ms with |vy| < 0.1 (except explicit gliding), and do
-not invent a landing when that neutral state ends. Resume falling immediately
-when vertical motion returns. This only handles sustained vertical stillness;
-it does not identify moving climbs, ladders or wall jumps. Do not claim climbing
-support from this fallback. Tests include the observed values, changing sample
-fingerprints, release into falling, a short apex and explicit gliding.
+Climb*/Ladder*/WallOff map to explicit climbing classification and quiet idle
+visuals until a matching companion climb animation exists. Only Jump/JumpMove,
+Fall or explicit gliding justify airborne visuals. Unknown airborne commands
+stay neutral. Land starts recovery immediately; Wait/Move end it immediately.
+The old extra ground-confirmation delay and fixed landing hold are not applied
+when a verified command exists. Never label this as an authored climb animation.
+
+The shared classifier now polls at up to 30 Hz, and airborne crossfades take
+50 ms with the same constant-alpha compositor. Original Jump was nearly a held
+pose, so replaying it for both ascent/descent looked frozen. Render Jump_St into
+Jump for takeoff; use Jump_Ed frames 1–2 for descent and 2–16 for contact/recovery.
+Do not use later contact frames in descent: crouching before landing also clipped
+the skirt. New jump/fall/land assets have 6/6/8 frames at 30 fps; landing playback
+fits 200 ms. Validate each alpha boundary (20 frames passed, minimum 8 px margin).
+
+Live verification recorded 78 valid observations: three stationary jumps, one
+running jump, moving and stationary climbing, wall release and landing. Each
+jump sampled jump→fall→land→idle/run at roughly 0/0.21/0.43/0.64 seconds relative
+to its first sample. These are animation phase times, not end-to-end latency
+measurements (the diagnostic command stream samples at about 10 Hz). Moving and
+stationary climb samples stayed classified as climb with idle visuals. WallOff
+remained neutral, then Fall/Land/Wait followed correctly. Wait for autoload to
+finish and a valid Wait command before driving the test; Actor presence alone
+is insufficient, and DemoWait can occur during loading.

@@ -119,23 +119,23 @@
     },
     "jump": {
       "file": "jump.png",
-      "frames": 9,
+      "frames": 6,
       "loop": false,
-      "fps": 15,
-      "source_action": "Jump"
+      "fps": 30,
+      "source_action": "Jump_St"
     },
     "fall": {
       "file": "fall.png",
-      "frames": 12,
-      "loop": true,
-      "fps": 15,
-      "source_action": "Jump"
+      "frames": 6,
+      "loop": false,
+      "fps": 30,
+      "source_action": "Jump_Ed"
     },
     "land": {
       "file": "land.png",
       "frames": 8,
       "loop": false,
-      "fps": 15,
+      "fps": 30,
       "source_action": "Jump_Ed"
     }
   }
