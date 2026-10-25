@@ -26,7 +26,16 @@ int main(void){
  a.airborne=1;a.velocity[1]=3;assert(STEP(.1)==PET_JUMP);
  a.velocity[1]=-2;assert(STEP(.1)==PET_FALL);a.gliding=1;assert(STEP(.1)==PET_GLIDE);
  a.gliding=a.airborne=0;a.speed=0;assert(STEP(.1)==PET_GLIDE);assert(STEP(.1)==PET_LAND);
- STEP(.25);STEP(.25);assert(STEP(.15)==PET_IDLE);
+ assert(STEP(.2)==PET_LAND);assert(STEP(.11)==PET_IDLE);
+ // Recovery ends on the first eligible sample; do not debounce locomotion again.
+ a.airborne=1;a.velocity[1]=-2;a.speed=5;assert(STEP(.1)==PET_FALL);
+ a.airborne=0;assert(STEP(.1)==PET_FALL);assert(STEP(.1)==PET_LAND);
+ assert(STEP(.2)==PET_LAND);assert(STEP(.11)==PET_RUN);
+ // A new jump interrupts recovery immediately, even in a rapid jump sequence.
+ a.airborne=1;a.velocity[1]=3;assert(STEP(.1)==PET_JUMP);
+ a.airborne=0;STEP(.1);assert(STEP(.1)==PET_LAND);
+ a.airborne=1;assert(STEP(.05)==PET_JUMP);
+ a.airborne=0;a.speed=0;STEP(.1);assert(STEP(.1)==PET_LAND);assert(STEP(.31)==PET_IDLE);
  a.combat=1;STEP(.1);assert(STEP(.15)==PET_COMBAT);
  a.speed=4;STEP(.1);assert(STEP(.15)==PET_COMBAT_RUN);
  a.active=0;assert(STEP(.1)==PET_IDLE);a.active=1;

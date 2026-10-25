@@ -40,6 +40,11 @@ int main(int argc,const char **argv){@autoreleasepool{
   assert(NSContainsRect(NSMakeRect(0,0,sheet.size.width,sheet.size.height),first));
   assert(NSContainsRect(NSMakeRect(0,0,sheet.size.width,sheet.size.height),last));
  }
+ // The full eight-frame recovery fits the classifier's landing interval.
+ NSImage *landSheet=hintAvatarSheet(@"land");
+ NSRect landMiddle=[pet sourceForState:@"land" time:PET_LAND_SECONDS*.5 sheet:landSheet];
+ NSRect landEnd=[pet sourceForState:@"land" time:PET_LAND_SECONDS-.001 sheet:landSheet];
+ assert(landMiddle.origin.x==4*192&&landEnd.origin.x==7*192);
  pet.motionTime=1;pet.greeting=0;hintWorking=hintDone=hintListening=hintVoiceFinishing=hintRecording=NO;
  assert([[pet desiredMotion] isEqual:@"idle"]);
  fakeActivity=(RuntimePlayerActivity){.valid=1,.active=1,.actor=1,.speed=5};

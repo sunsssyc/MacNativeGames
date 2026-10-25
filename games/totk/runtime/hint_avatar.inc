@@ -46,7 +46,7 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
 @property NSUInteger idleCycle,greetingCycle;
 @property BOOL hasGreeted;
 @property NSString *greetingMotion;
-@property NSTimeInterval lastTick,clipStart,transitionStart;
+@property NSTimeInterval lastTick,clipStart,transitionStart,transitionDuration;
 @property NSString *motionState;
 @property NSImage *previousSheet;
 @property NSRect previousSource;
@@ -131,7 +131,8 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  NSInteger w=[m[@"width"] integerValue],h=[m[@"height"] integerValue],cols=[m[@"columns"] integerValue];
  NSInteger count=[clip[@"frames"] integerValue],fps=[clip[@"fps"] integerValue];
  if(w<1||h<1||cols<1||count<1||count>256||fps<1||fps>30||sheet.size.width<cols*w||sheet.size.height<((count+cols-1)/cols)*h)return NSZeroRect;
- NSInteger frame=(NSInteger)(MAX(0,time)*fps);
+ double playbackFPS=[state isEqual:@"land"]?count/PET_LAND_SECONDS:fps;
+ NSInteger frame=(NSInteger)(MAX(0,time)*playbackFPS);
  frame=[clip[@"loop"] boolValue]?frame%count:MIN(count-1,frame);
  if(self.held)frame=MIN(count-1,8);
  if(NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion)frame=0;
@@ -162,9 +163,10 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  if(![state isEqual:self.motionState]){
   self.previousSheet=hintAvatarSheet(self.motionState?:@"idle");
   self.previousSource=[self sourceForState:self.motionState?:@"idle" time:self.motionTime-self.clipStart sheet:self.previousSheet];
+  self.transitionDuration=([state isEqual:@"land"]||[self.motionState isEqual:@"land"])? .08:.16;
   self.motionState=state;self.clipStart=self.motionTime;self.transitionStart=self.motionTime;
  }
- CGFloat blend=MIN(1,MAX(0,(self.motionTime-self.transitionStart)/.16));
+ CGFloat blend=MIN(1,MAX(0,(self.motionTime-self.transitionStart)/MAX(.01,self.transitionDuration)));
  if(NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion||!self.previousSheet)blend=1;
  NSRect source=[self sourceForState:state time:self.motionTime-self.clipStart sheet:sheet];
  if(blend<1)[self drawTransitionFrom:self.previousSheet source:self.previousSource to:sheet source:source blend:blend];

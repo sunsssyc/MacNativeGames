@@ -2,6 +2,8 @@
 #define TOTK_COMPANION_ACTIVITY_H
 #include "player_activity.h"
 typedef enum { PET_IDLE,PET_WALK,PET_RUN,PET_JUMP,PET_FALL,PET_GLIDE,PET_LAND,PET_COMBAT,PET_COMBAT_RUN } PetActivity;
+// Shared with sprite playback: finish the recovery before returning to locomotion.
+#define PET_LAND_SECONDS .30
 typedef struct {
  PetActivity state,pending;double since,last,last_valid,grounded_since,land_until;uint64_t actor,observation;double changed;uint32_t generation;int was_air,falling;
 } PetActivityTracker;
@@ -38,13 +40,14 @@ static inline PetActivity pet_activity_update(PetActivityTracker *t,const Runtim
   if(t->was_air){
    if(!t->grounded_since)t->grounded_since=now;
    if(now-t->grounded_since<.08)return t->state; // confirm contact across two samples
-   t->land_until=now+.45;t->was_air=t->falling=0;t->grounded_since=0;
+   t->land_until=now+PET_LAND_SECONDS;t->was_air=t->falling=0;t->grounded_since=0;
   }
   int moving=a->speed>(t->state==PET_WALK||t->state==PET_RUN||t->state==PET_COMBAT_RUN?.25:.55);
   int running=a->speed>(t->state==PET_RUN?3.0:3.8);
   desired=now<t->land_until?PET_LAND:(a->combat||a->aiming)?(moving?PET_COMBAT_RUN:PET_COMBAT):moving?(running?PET_RUN:PET_WALK):PET_IDLE;
  }
  if(desired==PET_LAND||desired==PET_JUMP||desired==PET_FALL||desired==PET_GLIDE){t->state=t->pending=desired;t->since=now;}
+ else if(t->state==PET_LAND){t->state=t->pending=desired;t->since=now;}
  else if(desired!=t->pending){t->pending=desired;t->since=now;}
  else if(now-t->since>=.12)t->state=desired;
  return t->state;

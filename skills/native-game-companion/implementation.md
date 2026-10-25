@@ -64,3 +64,14 @@ near-zero vertical-speed sample. Confirm ground contact across two samples befor
 landing. A single failed guarded read can hold the previous visual state for at
 most 180 ms; explicit paused state, stale samples and identity changes still reset.
 Tests inject apex jitter, a one-sample false landing and brief/long read failures.
+
+## Landing recovery timing
+
+Use one duration for the state machine and sprite playback (`PET_LAND_SECONDS`,
+0.30 seconds). Landing exit bypasses ordinary locomotion debounce: adding that
+delay after a fixed landing hold made the character appear to wait before running.
+Play all eight recovery frames within that interval and use an 80 ms transition
+at landing boundaries. Keep two-sample contact confirmation and immediate airborne
+interrupts. Tests cover landing to idle/run, rapid re-jumping, and reaching the last
+recovery sprite before the interval expires. These checks validate timing, not a
+claim that sprite crossfades are continuous skeletal blending.
