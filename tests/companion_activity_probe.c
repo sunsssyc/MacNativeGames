@@ -85,6 +85,9 @@ int main(void){
  // Grounded sword combos trigger once per command and stop immediately.
  a.airborne=0;a.combat=1;strcpy(a.action,"CutS1");assert(STEP(.033)==PET_ATTACK);
  double strike=t.attack_started;assert(STEP(.033)==PET_ATTACK&&t.attack_started==strike);
+ // Real stationary CutS1/CutSF can retain identical AS values for >600 ms.
+ // Complete one non-looping response, never disappear/restart mid-command.
+ for(int i=0;i<60;i++){now+=.033;assert(pet_activity_update(&t,&a,now,now)==PET_ATTACK&&t.attack_started==strike);}
  strcpy(a.action,"CutS2");assert(STEP(.033)==PET_ATTACK&&t.attack_started>strike);
  strcpy(a.action,"Wait");assert(STEP(.033)==PET_COMBAT);
  strcpy(a.action,"WeaponEquipOn");assert(STEP(.033)==PET_COMBAT);

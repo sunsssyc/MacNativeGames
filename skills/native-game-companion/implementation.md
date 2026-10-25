@@ -141,3 +141,12 @@ with a minimum 12 px margin. The pure decoder/classifier test and four AppKit
 regression suites passed, including continuous-command versus new-combo restart.
 Ground attack command routing is checked against Player.root.asb and fixtures;
 new live combat verification remains pending while the user's formal game runs.
+
+Live weapon test found stationary CutS1/CutSF can keep the entire AS blackboard
+and position unchanged for over 600 ms. The generic stale-observation fallback
+was cutting the slash short and removing the swords. For an already observed,
+still-valid identical grounded attack command, finish the single non-looping
+clip and hold its final ready pose; do not restart it from unchanged observations.
+Invalid/inactive actors and explicit command changes still interrupt normally.
+This also bounds movement when an in-game menu freezes the command: one response,
+then a static pose. The regression test holds an identical sample for two seconds.

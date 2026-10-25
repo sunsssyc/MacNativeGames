@@ -34,7 +34,14 @@ static inline PetActivity pet_activity_update(PetActivityTracker *t,const Runtim
  t->last=t->last_valid=now;
  // In-game menus can retain an active Actor and old airborne/velocity flags.
  // Stop reacting if the whole AS sample plus position has stopped changing.
- if(now-t->changed>.6){t->state=t->pending=PET_IDLE;t->was_air=0;t->land_until=0;return PET_IDLE;}
+ if(now-t->changed>.6){
+  // A stationary slash can leave every BB value unchanged for longer than
+  // 600 ms. Finish its ONE non-looping clip and hold the final ready pose.
+  // Never restart it from a frozen observation (including a paused menu).
+  if(t->state==PET_ATTACK&&!a->airborne&&!a->water&&!a->riding&&
+     pet_is_ground_attack(a->action)&&!strcmp(t->attack_command,a->action))return PET_ATTACK;
+  t->state=t->pending=PET_IDLE;t->was_air=0;t->land_until=0;return PET_IDLE;
+ }
  PetActivity desired=PET_IDLE;
  const char *action=a->action;
  int known=action[0]!=0;
