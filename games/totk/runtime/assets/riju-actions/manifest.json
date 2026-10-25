@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "width": 192,
+  "height": 288,
+  "columns": 8,
+  "fps": 15,
+  "clips": {
+    "idle": {
+      "file": "idle.png",
+      "frames": 25,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Default_Wait"
+    },
+    "greeting": {
+      "file": "greeting.png",
+      "frames": 18,
+      "loop": false,
+      "fps": 15,
+      "source_action": "Default_Joy_Hello"
+    },
+    "fidget": {
+      "file": "fidget.png",
+      "frames": 128,
+      "loop": false,
+      "fps": 15,
+      "source_action": "Default_Wait_Random"
+    },
+    "listening": {
+      "file": "listening.png",
+      "frames": 35,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Default_Normal_Talk_Wait"
+    },
+    "thinking": {
+      "file": "thinking.png",
+      "frames": 30,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Default_Think_Talk_Wait"
+    },
+    "reply": {
+      "file": "reply.png",
+      "frames": 25,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Default_Normal_Talk"
+    },
+    "welcome": {
+      "file": "welcome.png",
+      "frames": 30,
+      "loop": false,
+      "fps": 15,
+      "source_action": "Default_Normal_Hello"
+    },
+    "ponder": {
+      "file": "ponder.png",
+      "frames": 27,
+      "loop": false,
+      "fps": 15,
+      "source_action": "Default_Think_Hello"
+    },
+    "explain": {
+      "file": "explain.png",
+      "frames": 30,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Default_Think_Talk"
+    },
+    "cheerful": {
+      "file": "cheerful.png",
+      "frames": 25,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Default_Joy_Talk"
+    },
+    "relaxed": {
+      "file": "relaxed.png",
+      "frames": 40,
+      "loop": false,
+      "fps": 15,
+      "source_action": "Default_Joy_Talk_Wait"
+    },
+    "surprised": {
+      "file": "surprised.png",
+      "frames": 15,
+      "loop": false,
+      "fps": 15,
+      "source_action": "Default_Surprised_Talk_Hello"
+    }
+  }
+}

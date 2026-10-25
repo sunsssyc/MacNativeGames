@@ -84,6 +84,12 @@ int main(int argc,const char **argv){@autoreleasepool{
  NSWindow *w=[[NSWindow alloc] initWithContentRect:NSMakeRect(200,200,1000,680) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
  w.title=@"卡关助手界面验证";w.backgroundColor=[NSColor colorWithCalibratedRed:0.07 green:0.085 blue:0.06 alpha:1];
  totk_hint_install(w);hintFolder=@(argv[1]);
+ // Hover and drag feedback preserve the control's fixed hit area; hidden panels stop animation.
+ TOTKHintAvatar *pet=(TOTKHintAvatar *)hintAvatar;
+ NSEvent *hover=[NSEvent mouseEventWithType:NSEventTypeMouseMoved location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:w.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
+ NSRect petFrame=pet.frame;[pet mouseEntered:hover];assert(pet.hovered&&pet.greeting>0);
+ [pet mouseExited:hover];assert(!pet.hovered&&NSEqualRects(petFrame,pet.frame));
+ hintExpanded=YES;[pet syncMotion];assert(!pet.motionTimer);hintExpanded=NO;
  assert(!hintDock.hidesOnDeactivate);assert(hintDock.collectionBehavior&NSWindowCollectionBehaviorFullScreenAuxiliary);
  // A drag moves the companion without opening chat, persists, and stays in bounds after resizing.
  hintExpanded=NO;hintDockPositionLoaded=NO;hintDockPositionSet=NO;hintDockLayout();

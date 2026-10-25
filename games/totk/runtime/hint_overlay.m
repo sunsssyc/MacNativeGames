@@ -16,7 +16,8 @@ static NSTextField *hintBubble;
 static NSView *hintBubbleSurface;
 static NSButton *hintAvatar;
 static NSButton *hintMic,*hintRead,*hintVoiceCancel;
-static NSImageView *hintPortrait;
+@class TOTKHintAvatar;
+static TOTKHintAvatar *hintPortrait;
 static NSMutableArray<NSString *> *hintHistory;
 static void hintDockLayout(void);
 static void hintGuideAsk(void);
@@ -129,14 +130,7 @@ static void hintActionsEnd(void){hintActionsGranted=NO;hintRuntimeStop();}
 }
 @end
 // A compact speech bubble shares the game's olive/ivory palette and points at Riju.
-@interface TOTKHintAvatar:NSButton
-@end
-@implementation TOTKHintAvatar
--(BOOL)acceptsFirstMouse:(NSEvent *)event{(void)event;return YES;}
--(void)mouseDown:(NSEvent *)event{hintDragBegin(event);}
--(void)mouseDragged:(NSEvent *)event{hintDragMove(event);}
--(void)mouseUp:(NSEvent *)event{hintDragEnd(event);}
-@end
+#include "hint_avatar.inc"
 @interface TOTKHintBubble:NSView
 @end
 @implementation TOTKHintBubble
@@ -463,6 +457,7 @@ static void hintPoll(void) {
 }
 #include "hint_companion.inc"
 #include "hint_voice.inc"
+static BOOL hintAvatarIsSpeaking(void){return hintPlayer.playing||hintSpeaker.speaking;}
 
 void totk_hint_install(NSWindow *window) {
 #if defined(GAME_BOTW)
@@ -490,7 +485,7 @@ void totk_hint_install(NSWindow *window) {
  hintQuestion=[TOTKHintInput new];hintQuestion.cell=[[TOTKHintInputCell alloc] initTextCell:@""];hintQuestion.editable=YES;hintQuestion.selectable=YES;hintQuestion.drawsBackground=YES;hintQuestion.bordered=NO;hintQuestion.focusRingType=NSFocusRingTypeNone;hintQuestion.font=hintFont(15);hintQuestion.textColor=hintInk();hintQuestion.backgroundColor=[NSColor colorWithCalibratedRed:0.085 green:0.09 blue:0.065 alpha:1];hintQuestion.placeholderAttributedString=[[NSAttributedString alloc] initWithString:@"输入问题，或继续追问…" attributes:@{NSForegroundColorAttributeName:[hintInk() colorWithAlphaComponent:0.65],NSFontAttributeName:hintFont(15)}];hintQuestion.target=hintActions;hintQuestion.action=@selector(send:);hintQuestion.delegate=hintActions;
  hintSend=[TOTKHintButton buttonWithTitle:@"发送" target:hintActions action:@selector(send:)];((TOTKHintButton *)hintSend).primary=YES;
  [hintPanel.contentView addSubview:hintQuestion];[hintPanel.contentView addSubview:hintSend];
- hintPortrait=[[NSImageView alloc] init];hintPortrait.image=[[NSImage alloc] initWithContentsOfFile:@"runtime/assets/riju-companion.png"];hintPortrait.imageScaling=NSImageScaleProportionallyUpOrDown;[hintPanel.contentView addSubview:hintPortrait];
+ hintPortrait=[[TOTKHintAvatar alloc] init];hintPortrait.portraitMode=YES;hintPortrait.bordered=NO;hintPortrait.image=[[NSImage alloc] initWithContentsOfFile:@"runtime/assets/riju-companion.png"];hintPortrait.imageScaling=NSImageScaleProportionallyUpOrDown;[hintPanel.contentView addSubview:hintPortrait];
  hintMic=[TOTKHintButton buttonWithTitle:@"语音提问" target:hintActions action:@selector(voice:)];hintRead=[TOTKHintButton buttonWithTitle:@"朗读" target:hintActions action:@selector(read:)];[hintPanel.contentView addSubview:hintMic];[hintPanel.contentView addSubview:hintRead];
  hintHistoryButton=[TOTKHintButton buttonWithTitle:@"历史" target:hintActions action:@selector(history:)];[hintPanel.contentView addSubview:hintHistoryButton];
  hintPointButton=[TOTKHintButton buttonWithTitle:@"指给我看" target:hintActions action:@selector(point:)];((TOTKHintButton *)hintPointButton).quiet=YES;

@@ -127,6 +127,8 @@ static void hintDockLayout(void){
  if(!NSEqualRects(frame,hintDock.frame))[hintDock setFrame:frame display:YES];
  if(hintExpanded){if(hintDock.visible)[hintDock orderOut:nil];}
  else if(hintGame.visible&&!hintDock.visible){[hintGame addChildWindow:hintDock ordered:NSWindowAbove];[hintDock orderFront:nil];}
+ [(TOTKHintAvatar *)hintAvatar syncMotion];
+ [hintPortrait syncMotion];
 }
 static void hintOpen(void){
  hintExpanded=YES;

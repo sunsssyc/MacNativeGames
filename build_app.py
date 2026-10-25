@@ -1358,6 +1358,9 @@ def step_app(tree, out, logs, *, version="v0", game='totk', data_outside=None, i
     if game == 'totk':
         clone(tree / 'runtime/assets/riju-companion.png', res / 'runtime/assets/riju-companion.png')
         clone(tree / 'runtime/assets/riju-mini-fullbody.png', res / 'runtime/assets/riju-mini-fullbody.png')
+        for source in sorted((tree / 'runtime/assets/riju-actions').glob('*')):
+            if source.suffix in {'.png', '.json'}:
+                clone(source, res / source.relative_to(tree))
         for source in sorted((tree / 'tools/hint_assistant').rglob('*.py')):
             clone(source, res / source.relative_to(tree))
         for source in sorted((tree / 'tools/hint_assistant/totk_hint/skills').glob('*/SKILL.md')):   # the built-in skills
