@@ -1,6 +1,8 @@
 /* Driving the assistant panel from the game's command channel, for automated tests of a test session only
    (TOTK_HINT_TEST=1): runtime/input.c hands every "hint ..." line here, and it runs on AppKit's main queue.
-     hint open | close | ask <text> | point [<text>] | next | read | key <Mac key code> | snap <png> | state <json>
+     hint open | close | ask <text> | point [<text>] | next | read | key <Mac key code> | snap <png> | state <json> |
+     voicecheck (hint_voice.inc: permissions, 1.5 s of the microphone, a synthesized sentence through the recognizer) |
+     voice (key 0: start listening, or stop and leave the words in the question field)
    snap draws what the player sees over the game window: the frame the panel opened on, the 指给我看 marks, the
    companion and the panel (the game's own window shot holds none of these windows). state writes what is on the
    panel for a script to check. Reading stays silent in a test session (volume 0); everything else runs as it does
@@ -45,7 +47,7 @@ static void hintTestState(NSString *path){
   @"page":@(hintPage),@"pages":@(hintPages.count),@"read_on":@(hintReadOn()),@"reading":@(hintReadID!=nil),
   @"read_system":@(hintReadSystem),@"read_engine":hintReadEngine?:@"",@"read_line":@(hintReadLine),@"read_playing":@(hintReadPlaying),
   @"scene_ready":@(hintSceneReady),@"marks":@(hintMarks.count),@"marks_visible":@(hintMarksWindow.visible),
-  @"paused":@(hintPauseHeld),@"history":@(hintHistory.count),@"buttons":buttons,@"time":@(NSDate.date.timeIntervalSince1970)};
+  @"paused":@(hintPauseHeld),@"question":hintQuestion.stringValue?:@"",@"listening":@(hintListening),@"voice_finishing":@(hintVoiceFinishing),@"history":@(hintHistory.count),@"buttons":buttons,@"time":@(NSDate.date.timeIntervalSince1970)};
  NSData *data=[NSJSONSerialization dataWithJSONObject:state options:NSJSONWritingPrettyPrinted error:nil];
  [data writeToFile:path options:NSDataWritingAtomic error:nil];
 }
@@ -66,6 +68,8 @@ int totk_hint_command(const char *line){
   else if([op isEqual:@"key"])hintTestKey((unsigned short)arg.intValue);
   else if([op isEqual:@"snap"])hintTestSnap(arg);
   else if([op isEqual:@"state"])hintTestState(arg);
+  else if([op isEqual:@"voicecheck"])hintVoiceCheck();
+  else if([op isEqual:@"voice"])hintVoiceShortcut();
   else{fprintf(stderr,"[hint-test] unknown: %s\n",command.UTF8String);return;}
   fprintf(stderr,"[hint-test] %s\n",command.UTF8String);
  });

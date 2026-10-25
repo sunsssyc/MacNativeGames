@@ -88,7 +88,7 @@
 
 ## 自动测试面板
 
-测试会话（`TOTK_HINT_TEST=1`，配合存档副本 `TOTK_PROFILE_DIR` 和 `TOTK_SLOT_OWNER`）里，命令通道（数据目录的 `input.txt`）接受 `hint` 命令，在游戏进程里驱动面板，不模拟全局按键（`runtime/hint_test.inc`）：`hint open | close | ask <问题> | point [<问题>] | next | read | key <Mac 键码> | snap <png> | state <json>`。`snap` 把暂停的画面、圈画、露珠和面板合成一张图（游戏自己的截图不含这些窗口）；`state` 写出面板上显示的内容和各按钮状态，供脚本检查。测试会话里朗读音量为 0。非测试会话收到 `hint` 命令只记一行日志。
+测试会话（`TOTK_HINT_TEST=1`，配合存档副本 `TOTK_PROFILE_DIR` 和 `TOTK_SLOT_OWNER`）里，命令通道（数据目录的 `input.txt`）接受 `hint` 命令，在游戏进程里驱动面板，不模拟全局按键（`runtime/hint_test.inc`）：`hint open | close | ask <问题> | point [<问题>] | next | read | key <Mac 键码> | snap <png> | state <json> | voice | voicecheck`。`voice` 等于按 0（开始听 / 停止）；`voicecheck` 不用人说话就检查语音：两项权限和识别器、1.5 秒麦克风的格式和电平（不保存、不识别），再把系统语音合成的一句话交给同一个识别器，结果写在日志的 `[hint-voice] check` 行里。`snap` 把暂停的画面、圈画、露珠和面板合成一张图（游戏自己的截图不含这些窗口）；`state` 写出面板上显示的内容和各按钮状态，供脚本检查。测试会话里朗读音量为 0。非测试会话收到 `hint` 命令只记一行日志。
 
 ## 朗读（可选）
 
