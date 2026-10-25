@@ -232,6 +232,75 @@ static void hintRecordBegin(void){
  hintVoiceWrite(@{@"id":hintSetupID,@"install":@YES});
 }
 @end
+/* hint voicecheck (test sessions, hint_test.inc): the voice path with nobody speaking, to tell a recognizer that does not
+   work from a microphone that hears nothing (2026-10-24: a spoken question came back empty). It logs, as [hint-voice]
+   check lines: both permissions and the zh-CN recognizer; 1.5 s of the default input (its format and loudness, nothing
+   kept or recognized); then a sentence the system voice writes to buffers (nothing is played), given to the recognizer
+   the same way as the player's words (on device, one float channel), and what it heard. */
+static AVSpeechSynthesizer *hintCheckVoice;
+static SFSpeechRecognitionTask *hintCheckTask;
+static void hintVoiceCheckSpeech(void){
+ SFSpeechRecognizer *recognizer=[[SFSpeechRecognizer alloc] initWithLocale:[NSLocale localeWithLocaleIdentifier:@"zh-CN"]];
+ SFSpeechAudioBufferRecognitionRequest *request=[SFSpeechAudioBufferRecognitionRequest new];
+ request.requiresOnDeviceRecognition=YES;request.shouldReportPartialResults=NO;
+ NSString *said=@"露珠，下一个神庙在哪里";NSDate *started=NSDate.date;
+ __block BOOL done=NO;
+ hintCheckTask=[recognizer recognitionTaskWithRequest:request resultHandler:^(SFSpeechRecognitionResult *result,NSError *error){
+  if(done||(!error&&!result.isFinal))return;
+  done=YES;
+  if(error)fprintf(stderr,"[hint-voice] check: recognizer failed after %.1f s: %s %ld: %s\n",-started.timeIntervalSinceNow,error.domain.UTF8String,(long)error.code,error.localizedDescription.UTF8String);
+  else fprintf(stderr,"[hint-voice] check: recognizer heard \"%s\" for \"%s\" in %.1f s\n",result.bestTranscription.formattedString.UTF8String,said.UTF8String,-started.timeIntervalSinceNow);
+ }];
+ AVSpeechUtterance *utterance=[AVSpeechUtterance speechUtteranceWithString:said];
+ utterance.voice=[AVSpeechSynthesisVoice voiceWithLanguage:@"zh-CN"];
+ fprintf(stderr,"[hint-voice] check: system voice %s\n",(utterance.voice.name?:@"none for zh-CN").UTF8String);
+ hintCheckVoice=[AVSpeechSynthesizer new];
+ __block AVAudioConverter *converter=nil;__block AVAudioFormat *mono=nil;__block BOOL told=NO;
+ [hintCheckVoice writeUtterance:utterance toBufferCallback:^(AVAudioBuffer *buffer){
+  AVAudioPCMBuffer *pcm=(AVAudioPCMBuffer *)buffer;
+  if(![pcm isKindOfClass:AVAudioPCMBuffer.class]||!pcm.frameLength){[request endAudio];return;}   // an empty buffer ends the sentence
+  if(!told){told=YES;fprintf(stderr,"[hint-voice] check: the voice writes %.0f Hz, %u channel(s), format %ld\n",pcm.format.sampleRate,(unsigned)pcm.format.channelCount,(long)pcm.format.commonFormat);}
+  if(pcm.format.commonFormat!=AVAudioPCMFormatFloat32||pcm.format.channelCount!=1){   // the player's words come as one float channel
+   if(!converter){mono=[[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32 sampleRate:pcm.format.sampleRate channels:1 interleaved:NO];converter=[[AVAudioConverter alloc] initFromFormat:pcm.format toFormat:mono];}
+   AVAudioPCMBuffer *one=[[AVAudioPCMBuffer alloc] initWithPCMFormat:mono frameCapacity:pcm.frameLength];NSError *failed=nil;
+   if(!one||![converter convertToBuffer:one fromBuffer:pcm error:&failed]){fprintf(stderr,"[hint-voice] check: could not convert the voice: %s\n",failed.localizedDescription.UTF8String);return;}
+   pcm=one;
+  }
+  [request appendAudioPCMBuffer:pcm];
+ }];
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW,25*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+  if(!done){done=YES;[hintCheckTask cancel];fprintf(stderr,"[hint-voice] check: the recognizer gave no result in 25 s\n");}
+  hintCheckTask=nil;hintCheckVoice=nil;
+ });
+}
+static void hintVoiceCheck(void){
+ SFSpeechRecognizer *recognizer=[[SFSpeechRecognizer alloc] initWithLocale:[NSLocale localeWithLocaleIdentifier:@"zh-CN"]];
+ fprintf(stderr,"[hint-voice] check: speech permission %ld, microphone permission %ld (3 = allowed), zh-CN recognizer %s, on device %s, input %s\n",
+         (long)[SFSpeechRecognizer authorizationStatus],(long)[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio],
+         recognizer.available?"available":"unavailable",recognizer.supportsOnDeviceRecognition?"yes":"no",
+         ([AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio].localizedName?:@"none").UTF8String);
+ if(hintListening||hintVoiceFinishing||hintAudio){fprintf(stderr,"[hint-voice] check: listening already; the microphone part is skipped\n");hintVoiceCheckSpeech();return;}
+ AVAudioEngine *engine=[AVAudioEngine new];AVAudioInputNode *input=engine.inputNode;AVAudioFormat *format=[input outputFormatForBus:0];
+ if(format.channelCount==0||format.sampleRate<=0){fprintf(stderr,"[hint-voice] check: no input format (no microphone)\n");hintVoiceCheckSpeech();return;}
+ NSObject *lock=[NSObject new];__block NSUInteger buffers=0,zero=0;__block float quiet=0,loud=-200;
+ [input installTapOnBus:0 bufferSize:1024 format:format block:^(AVAudioPCMBuffer *buffer,AVAudioTime *when){(void)when;
+  const float *s=buffer.floatChannelData?buffer.floatChannelData[0]:NULL;if(!s||!buffer.frameLength)return;
+  double sum=0;for(AVAudioFrameCount i=0;i<buffer.frameLength;i++)sum+=(double)s[i]*s[i];
+  float db=(float)(10*log10(sum/buffer.frameLength+1e-12));
+  @synchronized(lock){buffers++;if(sum==0)zero++;if(buffers==1||db<quiet)quiet=db;if(db>loud)loud=db;}
+ }];
+ NSError *error=nil;[engine prepare];
+ if(![engine startAndReturnError:&error]){fprintf(stderr,"[hint-voice] check: the microphone did not start: %s\n",error.localizedDescription.UTF8String);[input removeTapOnBus:0];hintVoiceCheckSpeech();return;}
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(1.5*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+  [engine stop];[input removeTapOnBus:0];
+  @synchronized(lock){
+   fprintf(stderr,"[hint-voice] check: microphone %.0f Hz, %u channel(s), %lu buffers in 1.5 s, %lu all zero, loudness %.0f to %.0f dBFS%s\n",
+           format.sampleRate,(unsigned)format.channelCount,(unsigned long)buffers,(unsigned long)zero,quiet,loud,
+           !buffers?" (no audio arrived)":zero==buffers?" (digital silence: the input is muted or not given to this app)":"");
+  }
+  hintVoiceCheckSpeech();
+ });
+}
 /* Key 0: ask by voice in one press. The panel opens (the game pauses) and listens at once; 0 again stops and leaves the
    words in the question field, where Return sends them; Esc cancels. The controller's voice button and X in the panel do
    the same (totk_hint_pad). While text is being typed (a question under way, an input method composing, the game's own
