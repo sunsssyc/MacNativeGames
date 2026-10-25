@@ -15,7 +15,7 @@ int main(int argc,const char **argv){@autoreleasepool{
  w.title=@"露珠动作验证";[w orderFront:nil];totk_hint_install(w);hintFolder=@(argv[1]);
  TOTKHintAvatar *pet=(TOTKHintAvatar *)hintAvatar;
  assert(hintAvatarManifest()[@"clips"]!=nil);
- assert([hintAvatarManifest()[@"clips"] count]==12);
+ assert([hintAvatarManifest()[@"clips"] count]==19);
  for(NSString *name in hintAvatarManifest()[@"clips"]){
   NSImage *sheet=hintAvatarSheet(name);assert(sheet);
   NSRect first=[pet sourceForState:name time:0 sheet:sheet],last=[pet sourceForState:name time:100 sheet:sheet];
@@ -25,7 +25,11 @@ int main(int argc,const char **argv){@autoreleasepool{
  }
  pet.motionTime=1;pet.greeting=0;hintWorking=hintDone=hintListening=hintVoiceFinishing=hintRecording=NO;
  assert([[pet desiredMotion] isEqual:@"idle"]);
+ fakeActivity=(RuntimePlayerActivity){.valid=1,.active=1,.actor=1,.speed=5};
+ hintActivityTracker=(PetActivityTracker){.state=PET_RUN,.pending=PET_RUN,.actor=1,.last=NSProcessInfo.processInfo.systemUptime,.changed=NSProcessInfo.processInfo.systemUptime};hintActivityPoll=hintActivityTracker.last;
+ assert([[pet desiredMotion] isEqual:@"run"]);
  hintListening=YES;assert([[pet desiredMotion] isEqual:@"listening"]);hintListening=NO;
+ fakeActivity=(RuntimePlayerActivity){0};hintActivityTracker=(PetActivityTracker){0};hintActivityPoll=0;
  hintRecording=YES;assert([[pet desiredMotion] isEqual:@"listening"]);hintRecording=NO;
  hintWorking=YES;assert([[pet desiredMotion] isEqual:@"ponder"]);
  [pet advanceMotion:2];assert([[pet desiredMotion] isEqual:@"thinking"]);

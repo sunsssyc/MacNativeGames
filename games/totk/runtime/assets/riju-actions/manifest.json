@@ -88,6 +88,55 @@
       "loop": false,
       "fps": 15,
       "source_action": "Default_Surprised_Talk_Hello"
+    },
+    "walk": {
+      "file": "walk.png",
+      "frames": 18,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Default_Move_Walk"
+    },
+    "run": {
+      "file": "run.png",
+      "frames": 10,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Common_Move_Run"
+    },
+    "combat": {
+      "file": "combat.png",
+      "frames": 20,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Combat_Wait"
+    },
+    "combat_run": {
+      "file": "combat_run.png",
+      "frames": 10,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Combat_Move_Run"
+    },
+    "jump": {
+      "file": "jump.png",
+      "frames": 9,
+      "loop": false,
+      "fps": 15,
+      "source_action": "Jump"
+    },
+    "fall": {
+      "file": "fall.png",
+      "frames": 12,
+      "loop": true,
+      "fps": 15,
+      "source_action": "Jump"
+    },
+    "land": {
+      "file": "land.png",
+      "frames": 8,
+      "loop": false,
+      "fps": 15,
+      "source_action": "Jump_Ed"
     }
   }
 }

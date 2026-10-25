@@ -5,6 +5,7 @@
    Only called after the actual game frame-end GPU wait, never from the input file thread. */
 #include "world_survey.h"
 #include "live_scene.h"
+#include "player_activity.h"
 #include "game_version.h"
 #include <ctype.h>
 #include <limits.h>
@@ -18,6 +19,7 @@
 #include <unistd.h>
 
 #ifdef GAME_BOTW
+int runtime_live_activity(RuntimePlayerActivity *out){memset(out,0,sizeof *out);return 0;}
 int runtime_live_player(float xyz[3]){(void)xyz;return -1;}
 int runtime_live_scene(RuntimeScene *out,float radius){(void)out;(void)radius;return -1;}
 int runtime_live_facing(float player_rot[9],float camera_rot[9],float camera_pos[3]){(void)player_rot;(void)camera_rot;(void)camera_pos;return -1;}
@@ -269,6 +271,19 @@ static uintptr_t player_actor(void) {
     uintptr_t player = 0;
     resident_actors(&player, NULL);
     return player;
+}
+int runtime_live_activity(RuntimePlayerActivity *out) {
+    memset(out,0,sizeof *out);
+#if defined(TOTK_GAME_V143)
+    if(!survey_main)return 0;
+    uintptr_t actor=player_actor(),vt=actor?read_ptr(actor):0;
+    if(!actor||vt<survey_main||vt>=survey_main+survey_main_size)return 0;
+    int ok=activity_decode143(read_mem,actor,out);
+    if(runtime_settings_paused())out->active=0;
+    return ok;
+#else
+    return 0;
+#endif
 }
 /* A rotation is usable when every value is finite and sane; a camera may look down, so the axis lengths are what is
    checked rather than a fixed facing. */

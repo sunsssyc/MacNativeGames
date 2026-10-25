@@ -27,3 +27,49 @@ xcrun swiftc pack_actions.swift -o /tmp/pack-actions
 The scene must include all named native actions used by render_actions.py; missing actions fail before rendering. Copy only manifest.json and the twelve top-level PNG atlases into runtime/assets/riju-actions/. build_app.py includes these assets in the Mac app. Do not copy individual frame folders into the bundle.
 
 Validate with tests/test_hint_avatar.py and tests/test_hint_overlay.py on macOS with WindowServer access. The avatar test exercises all twelve clips, speech variants, idle scheduling and interruption, greeting cooldown, frame progression, fixed click bounds, header animation and hidden-view timer teardown. No microphone or model request is started by it.
+
+## Live Link activity (1.4.3)
+
+`runtime/player_activity.h` is the guarded read adapter; `world_survey.c` locates the
+resident player without scanning the whole actor table. `companion_activity.h`
+classifies the sample locally. `hint_avatar.inc` samples at 10 Hz and gives dialogue,
+voice and dragging priority. No model requests are made by this feature.
+
+The new sprite clips are `walk`, `run`, `jump`, `fall`, `land`, `combat` and
+`combat_run`. Gliding currently uses the same held airborne pose as falling; it
+does not pretend to include a parasail. Combat means the game's battle/aim stance,
+not a confirmed enemy encounter. Water and standing rides return to idle.
+
+To bake locomotion onto an approved rig (requires local game assets and bfrespy):
+
+```sh
+blender -b --python games/totk/tools/companion/bake_locomotion.py -- \
+  --parser /absolute/path/to/io_scene_bfres \
+  --assets /absolute/path/containing/game-decoded-and-game-original \
+  --scene /absolute/path/to/approved-rig.blend --output /absolute/path/to/baked
+blender -b --python games/totk/tools/companion/render_actions.py -- \
+  --scene /absolute/path/to/baked/riju-companion-actions.blend \
+  --output /absolute/path/to/frames --only walk,run,jump,fall,land,combat,combat_run
+swift games/totk/tools/companion/pack_actions.swift /absolute/path/to/frames
+```
+
+`--only` merges an existing manifest. Keep all original gesture sheets when adding
+these sheets to the application's manifest. Root travel is removed for walk/run;
+lowest deformed geometry is kept above the standing floor to avoid skirt clipping.
+The character's saved dock position and hit rectangle never follow Link's position.
+
+Regression tests:
+
+```sh
+python3 -m unittest discover -s tests -p test_companion_activity.py -v
+python3 -m unittest discover -s tests -p test_hint_avatar.py -v
+python3 -m unittest discover -s tests -p test_hint_overlay.py -v
+```
+
+In an owned test session with `TOTK_HINT_TEST=1`, `hint state <absolute-json-path>`
+includes the decoded activity and a diagnostic stage when it is unavailable.
+
+Freshness is checked in two ways: sample age and an observation fingerprint of the
+AS values plus world position. If the observation does not change for 0.6 seconds,
+movement reactions return to idle. This is a conservative stale-state fallback,
+not a full game-menu detector; perfectly static battle stance can also relax to idle.

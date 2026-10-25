@@ -37,7 +37,9 @@ static void hintTestState(NSString *path){
   @"actions":hintActionsButton?:NSNull.null,@"setup":hintVoiceSetup?:NSNull.null,@"history":hintHistoryButton?:NSNull.null,
   @"mic":hintMic?:NSNull.null,@"send":hintSend?:NSNull.null,@"back":hintBack?:NSNull.null};
  for(NSString *name in named){NSButton *b=named[name];if([b isKindOfClass:NSButton.class])buttons[name]=@{@"title":b.title?:@"",@"hidden":@(b.hidden),@"enabled":@(b.enabled)};}
- NSDictionary *state=@{@"expanded":@(hintExpanded),@"panel_visible":@(hintPanel.visible),@"working":@(hintWorking),@"done":@(hintDone),
+ RuntimePlayerActivity a={0};if(runtime_live_activity)runtime_live_activity(&a);
+ NSDictionary *activity=@{@"valid":@(a.valid),@"active":@(a.active),@"diagnostic":@(a.diagnostic),@"aiming":@(a.aiming),@"pet_motion":[(TOTKHintAvatar *)hintAvatar desiredMotion]?:@"idle",@"speed":@(a.speed),@"vy":@(a.velocity[1]),@"airborne":@(a.airborne),@"combat":@(a.combat),@"gliding":@(a.gliding),@"water":@(a.water),@"riding":@(a.riding)};
+ NSDictionary *state=@{@"activity":activity,@"expanded":@(hintExpanded),@"panel_visible":@(hintPanel.visible),@"working":@(hintWorking),@"done":@(hintDone),
   @"text":hintText.stringValue?:@"",@"bubble":hintBubble.stringValue?:@"",@"disclosure":hintDisclosure.stringValue?:@"",
   @"stage":hintStage?:@"",@"partial_chars":@(hintPartial.length),@"revealed":@(hintRevealed),
   @"page":@(hintPage),@"pages":@(hintPages.count),@"read_on":@(hintReadOn()),@"reading":@(hintReadID!=nil),

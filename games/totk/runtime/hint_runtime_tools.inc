@@ -25,6 +25,12 @@ static NSDictionary *hintRuntimeState(void){
  @"player_present":@(present==1),@"world_state":@"unknown",
  @"note":@"Player objects may exist on the title screen; presence and position do not establish gameplay. Scene, health and live quests are unknown",
  @"assistant_paused":@(hintPauseHeld),@"action_active":@(hintRuntimeActive()),@"health":[NSNull null],@"quests":[NSNull null]} mutableCopy];
+ RuntimePlayerActivity activity={0};
+ if(runtime_live_activity&&runtime_live_activity(&activity)&&activity.valid){
+  s[@"player_activity"]=@{@"source":@"player_animation_blackboard",@"active":@(activity.active),
+   @"speed_xz":@(activity.speed),@"vertical_velocity":@(activity.velocity[1]),@"airborne":@(activity.airborne),
+   @"in_water":@(activity.water),@"combat_stance":@(activity.combat),@"aiming":@(activity.aiming),@"gliding":@(activity.gliding),@"standing_ride":@(activity.riding)};
+ }
  if(present==1)s[@"position"]=@[@(xyz[0]),@(xyz[1]),@(xyz[2])];
  // The player's facing, the camera and the actors within 150 m (world_survey.c, 1.4.3); the assistant names them.
  RuntimeScene scene;

@@ -3,6 +3,8 @@
 int runtime_live_player(float xyz[3]){xyz[0]=1;xyz[1]=2;xyz[2]=3;return 1;}
 // One actor ahead of the player, as world_survey.c reads them in the game, plus one that can appear on demand (the
 // runtime_state "changes" test).
+static RuntimePlayerActivity fakeActivity;
+int runtime_live_activity(RuntimePlayerActivity *out){*out=fakeActivity;return out->valid;}
 static int sceneExtra;
 int runtime_live_scene(RuntimeScene *out,float radius){
  (void)radius;memset(out,0,sizeof *out);out->rot[0]=out->rot[4]=1;out->rot[8]=-1;out->table=2135;out->has_camera=1;out->camera[2]=8;

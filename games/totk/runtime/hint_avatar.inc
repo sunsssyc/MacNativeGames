@@ -1,5 +1,20 @@
+#include "companion_activity.h"
+extern int runtime_live_activity(RuntimePlayerActivity *out) __attribute__((weak_import));
 // Transparent frames rendered from the skinned Riju model; no per-frame 3D renderer in the game.
 // All frames share a camera/foot anchor, so animation never moves the click target or saved dock position.
+// A shared, bounded 10 Hz read for dock and portrait. No model calls, screenshots or actor-table scan.
+static PetActivityTracker hintActivityTracker;
+static NSTimeInterval hintActivityPoll;
+static NSString *hintActivityMotion(void){
+ NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;
+ if(now-hintActivityPoll>=.1){
+  RuntimePlayerActivity a={0};if(runtime_live_activity)runtime_live_activity(&a);
+  pet_activity_update(&hintActivityTracker,&a,now,now);hintActivityPoll=now;
+ }
+ PetActivity state=hintActivityTracker.state;
+ // The airborne pose also covers gliding until a dedicated parasail clip is authored.
+ return state==PET_GLIDE?@"fall":@(pet_activity_name(state));
+}
 static BOOL hintAvatarIsSpeaking(void);
 static NSDictionary *hintAvatarManifest(void){
  static NSDictionary *manifest;static dispatch_once_t once;
@@ -89,6 +104,8 @@ static NSTimeInterval hintAvatarDuration(NSString *name){
  // Enter the held thinking pose before ponder's return-to-idle tail.
  if(hintWorking||hintVoiceFinishing)return self.workingTime<MAX(.1,hintAvatarDuration(@"ponder")-.27)?@"ponder":@"thinking";
  if(self.greeting>0)return self.greetingMotion?:@"greeting";
+ NSString *activity=hintActivityMotion();
+ if(![activity isEqual:@"idle"]){self.idleElapsed=0;return activity;}
  if(self.idleElapsed>=[self idleDelay])return [self idleGesture];
  return @"idle";
 }
